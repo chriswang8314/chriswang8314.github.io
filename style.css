@@ -1,0 +1,742 @@
+/* ---------- theme ----------
+   The page takes its palette from the painting. The time of day in the
+   painting picks the theme: day, a warmer evening, or the dark nocturne. */
+
+:root {
+  --ultramarine: #2d4f9e;
+  --chrome: #f2c230;
+  --vermilion: #c8442a;
+  --violet: #3b3a5e;
+  --cream-text: #fff8e7;
+  /* the hero controls: a soft Naples cream rather than the wheat's chrome
+     yellow, so the painting stays the brightest thing on screen */
+  --ui-cream: #f2e6c9;
+
+  --bg: #f6efdd;
+  --card: #fbf7ec;
+  --text: #2b2a3a;
+  --muted: #5e5868;
+  --border: rgba(59, 58, 94, 0.16);
+  --accent: var(--ultramarine);
+  --underline: var(--vermilion);
+  --chip-bg: rgba(45, 79, 158, 0.08);
+  --chip-text: #2d4f9e;
+  --weave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='3'%3E%3Cpath d='M0 .5h3M.5 0v3' stroke='%233b2a14' stroke-opacity='.05'/%3E%3C/svg%3E");
+  --nav-bg: rgba(246, 239, 221, 0.78);
+
+  --serif: 'Fraunces', 'Iowan Old Style', Georgia, serif;
+  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  color-scheme: light;
+}
+
+:root[data-theme='evening'] {
+  --bg: #f7ecd6;
+  --card: #fcf5e8;
+  --accent: #9a3a22;
+  --underline: #d65f35;
+  --chip-bg: rgba(200, 68, 42, 0.09);
+  --chip-text: #93361f;
+  --nav-bg: rgba(247, 236, 214, 0.8);
+}
+
+:root[data-theme='night'] {
+  --bg: #141b33;
+  --card: #1b2442;
+  --text: #f3ebd6;
+  --muted: #b1adc4;
+  --border: rgba(242, 194, 48, 0.18);
+  --accent: var(--chrome);
+  --underline: var(--chrome);
+  --chip-bg: rgba(242, 194, 48, 0.12);
+  --chip-text: #f2d06b;
+  --weave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='3'%3E%3Cpath d='M0 .5h3M.5 0v3' stroke='%23fff' stroke-opacity='.035'/%3E%3C/svg%3E");
+  --nav-bg: rgba(20, 27, 51, 0.8);
+  color-scheme: dark;
+}
+
+/* ---------- base ---------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html {
+  background: var(--bg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+body {
+  overflow-x: clip;
+  background-color: var(--bg);
+  /* a faint canvas weave, as a tiny tile */
+  background-image: var(--weave);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 1.09rem;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.6s ease, color 0.6s ease;
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--serif);
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  left: 16px;
+  top: -60px;
+  z-index: 50;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--violet);
+  color: var(--cream-text);
+}
+
+.skip-link:focus {
+  top: 16px;
+}
+
+/* ---------- nav: appears once the hero is scrolled past ---------- */
+
+.site-nav {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 56px;
+  padding: 0 max(16px, calc((100% - 960px) / 2));
+  background: var(--nav-bg);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transform: translateY(-100%);
+  opacity: 0;
+  visibility: hidden;
+  transition: transform 0.35s ease, opacity 0.35s ease, visibility 0s linear 0.35s;
+}
+
+.site-nav.visible {
+  transform: none;
+  opacity: 1;
+  visibility: visible;
+  transition: transform 0.35s ease, opacity 0.35s ease;
+}
+
+.nav-name {
+  font-family: var(--serif);
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.site-nav ul {
+  display: flex;
+  align-items: center;
+  gap: clamp(10px, 3vw, 24px);
+  padding: 0;
+  list-style: none;
+  font-size: 0.95rem;
+}
+
+.site-nav ul a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.site-nav ul a:hover {
+  color: var(--accent);
+}
+
+.nocturne-toggle {
+  padding: 3px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-family: var(--serif);
+  font-style: italic;
+  cursor: pointer;
+}
+
+.nocturne-toggle[aria-pressed='true'] {
+  background: var(--chip-bg);
+}
+
+@media (max-width: 520px) {
+  .nav-name {
+    display: none;
+  }
+
+  .site-nav {
+    justify-content: center;
+  }
+}
+
+/* ---------- hero: the painting, full screen ---------- */
+
+/* The painting is one canvas that runs on 35svh past the hero, where the
+   field dissolves into the page; the page background shows through the bare
+   canvas, so there's no edge between them. Everything scrolls together in
+   normal flow. */
+.hero {
+  position: relative;
+  height: 100vh;
+  height: 100svh;
+}
+
+.hero-still,
+#scene {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 135vh;
+  height: 135svh;
+}
+
+.hero-still {
+  object-fit: cover;
+  object-position: top;
+}
+
+#scene {
+  display: block;
+  opacity: 0;
+  /* horizontal drags brush the wheat; vertical drags still scroll the page */
+  touch-action: pan-y;
+  transition: opacity 0.8s ease;
+}
+
+#scene.ready {
+  opacity: 1;
+}
+
+/* name and links over the sky, on a translucent blue panel so the cream text
+   always has strong contrast; site.js keeps it clear of the sun and town */
+.hero-text {
+  position: absolute;
+  z-index: 2;
+  top: 12vh;
+  left: max(24px, 5vw);
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: 16px 24px 18px;
+  border-radius: 18px;
+  background: rgba(16, 26, 66, 0.68);
+  color: var(--cream-text);
+  text-shadow: 0 1px 8px rgba(10, 18, 48, 0.55);
+}
+
+/* once placed, it glides to new spots as the sun moves */
+@media (prefers-reduced-motion: no-preference) {
+  .hero-text.placed {
+    transition: top 0.8s ease, left 0.8s ease;
+  }
+}
+
+.hello {
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+  opacity: 0.92;
+}
+
+.hero-name {
+  font-size: clamp(2.1rem, min(4.2vw, 6.5vh), 3.6rem);
+  letter-spacing: -0.01em;
+}
+
+/* when there's little sky to work with, a tighter version */
+.hero-text.compact {
+  padding: 12px 18px 14px;
+}
+
+.hero-text.compact .hero-name {
+  font-size: clamp(1.8rem, min(3.4vw, 5vh), 2.8rem);
+}
+
+.hero-text.compact .hero-links {
+  margin-top: 10px;
+}
+
+.hero-tagline {
+  margin-top: 6px;
+  font-size: 1.05rem;
+}
+
+.hero-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.icon-link {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid rgba(255, 248, 231, 0.45);
+  border-radius: 50%;
+  color: var(--cream-text);
+  transition: background 0.2s;
+}
+
+.icon-link:hover {
+  background: rgba(255, 248, 231, 0.16);
+}
+
+.icon-link svg {
+  width: 19px;
+  height: 19px;
+}
+
+.resume-button {
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: var(--ui-cream);
+  color: #2b2a3a;
+  font-weight: 600;
+  text-decoration: none;
+  text-shadow: none;
+  transition: transform 0.2s;
+}
+
+.resume-button:hover {
+  transform: translateY(-1px);
+}
+
+.hero :focus-visible {
+  outline-color: var(--cream-text);
+}
+
+/* ---------- time of day control ---------- */
+
+.time-control {
+  position: absolute;
+  z-index: 3;
+  top: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  background: rgba(16, 26, 66, 0.55);
+  color: var(--cream-text);
+}
+
+.time-toggle {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  pointer-events: none; /* only a button on small screens */
+}
+
+.time-control svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+body.night .icon-sun,
+body:not(.night) .icon-moon {
+  display: none;
+}
+
+.time-panel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.time-control input[type='range'] {
+  width: 140px;
+  min-width: 0;
+  accent-color: var(--ui-cream);
+  cursor: pointer;
+}
+
+.time-label {
+  min-width: 64px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.time-now {
+  padding: 2px 10px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.time-now[hidden] {
+  display: none;
+}
+
+.time-control :focus-visible {
+  outline: 2px solid var(--cream-text);
+  outline-offset: 3px;
+}
+
+/* on small screens the control folds down to an icon that opens on tap */
+@media (max-width: 640px) {
+  .time-control {
+    top: 14px;
+    right: 14px;
+    padding: 4px;
+  }
+
+  .time-toggle {
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
+  .time-panel {
+    display: none;
+  }
+
+  .time-control.open {
+    left: 14px;
+    padding-right: 12px;
+  }
+
+  .time-control.open .time-panel {
+    display: flex;
+    flex: 1;
+  }
+
+  .time-control.open input[type='range'] {
+    flex: 1;
+    width: auto;
+  }
+}
+
+/* ---------- hint & scroll cue ---------- */
+
+.hint {
+  position: absolute;
+  left: 50%;
+  bottom: 84px;
+  z-index: 2;
+  max-width: calc(100% - 32px);
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(50, 34, 10, 0.62);
+  color: #fff8e6;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+  transition: opacity 1.2s ease;
+}
+
+body.night .hint {
+  background: rgba(10, 14, 36, 0.6);
+  color: #dfe6ff;
+}
+
+.hint.hidden {
+  opacity: 0;
+}
+
+.scroll-cue {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-left: -22px;
+  border-radius: 50%;
+  background: rgba(255, 248, 231, 0.85);
+  box-shadow: 0 4px 14px rgba(20, 27, 51, 0.25);
+  color: #1d2747;
+  transition: opacity 0.4s ease, visibility 0s linear 0s;
+}
+
+/* gone as soon as the page starts scrolling */
+.scroll-cue.gone {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.4s ease, visibility 0s linear 0.4s;
+}
+
+.scroll-cue:focus-visible {
+  outline-color: var(--cream-text);
+}
+
+.scroll-cue svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .scroll-cue svg {
+    animation: nudge 2.2s ease-in-out infinite;
+  }
+}
+
+@keyframes nudge {
+  0%,
+  100% {
+    transform: translateY(-2px);
+  }
+
+  50% {
+    transform: translateY(4px);
+  }
+}
+
+/* ---------- content ---------- */
+
+/* the content rides over the bottom of the painting, starting where the
+   strokes have thinned out to bare ground */
+main {
+  position: relative;
+  z-index: 1;
+  padding-top: 26vh;
+  padding-top: 26svh;
+}
+
+.section {
+  width: min(760px, 100% - 40px);
+  margin: 0 auto;
+  padding: 56px 0 24px;
+  scroll-margin-top: 72px;
+}
+
+.section h2 {
+  margin-bottom: 22px;
+  font-size: clamp(1.8rem, 3.4vw, 2.3rem);
+}
+
+.prose,
+.prose p {
+  max-width: 680px;
+}
+
+.prose p + p {
+  margin-top: 1em;
+}
+
+/* optional: see the README for adding a headshot to About */
+.headshot {
+  display: block;
+  width: 140px;
+  height: 140px;
+  margin-bottom: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.currently {
+  display: grid;
+  gap: 10px;
+  max-width: 680px;
+  padding-left: 1.2em;
+}
+
+.currently li::marker {
+  color: var(--underline);
+}
+
+/* ---------- project cards ---------- */
+
+.cards {
+  display: grid;
+  gap: 18px;
+}
+
+.card {
+  position: relative;
+  padding: 20px 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  transition: transform 0.25s ease, box-shadow 0.25s ease, background-color 0.6s ease;
+}
+
+.card:hover,
+.card:focus-within {
+  box-shadow: 0 10px 28px -16px rgba(30, 30, 60, 0.35);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .card:hover,
+  .card:focus-within {
+    transform: translateY(-3px);
+  }
+}
+
+.card-title {
+  font-size: 1.28rem;
+}
+
+/* a short brush-stroke underline appears under the title on hover */
+.card-title span {
+  position: relative;
+}
+
+.card-title span::after {
+  content: '';
+  position: absolute;
+  left: -2px;
+  bottom: -7px;
+  width: min(100%, 7em);
+  height: 9px;
+  background: var(--underline);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 10' preserveAspectRatio='none'%3E%3Cpath d='M2 6.5c18-3 40-4.5 62-4 18 .3 36 1.3 54 3.2-17 .6-35 1.7-53 2.5C44 9 22 9.3 4 8.6 1.5 8.4.6 7 2 6.5z'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 10' preserveAspectRatio='none'%3E%3Cpath d='M2 6.5c18-3 40-4.5 62-4 18 .3 36 1.3 54 3.2-17 .6-35 1.7-53 2.5C44 9 22 9.3 4 8.6 1.5 8.4.6 7 2 6.5z'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.35s ease;
+}
+
+.card:hover .card-title span::after,
+.card:focus-within .card-title span::after {
+  transform: scaleX(1);
+}
+
+.card-meta {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.card-desc {
+  margin-top: 10px;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.tags li {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  color: var(--chip-text);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.card-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin-top: 12px;
+  font-size: 0.95rem;
+}
+
+/* ---------- contact & footer ---------- */
+
+.contact-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  margin-top: 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.site-footer {
+  width: min(760px, 100% - 40px);
+  margin: 56px auto 0;
+  padding: 24px 0 40px;
+  border-top: 1px solid var(--border);
+  font-size: 0.92rem;
+}
+
+.site-footer p + p {
+  margin-top: 4px;
+}
