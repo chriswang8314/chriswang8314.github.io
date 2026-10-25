@@ -254,6 +254,13 @@ h3 {
   object-position: top;
 }
 
+/* once the live painting has faded in, the still must go: the live canvas is
+   bare between strokes in the dissolve, and the still's own fixed, unlit
+   strokes would show through there */
+.hero-still.retired {
+  visibility: hidden;
+}
+
 #scene {
   display: block;
   opacity: 0;

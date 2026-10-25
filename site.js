@@ -254,6 +254,8 @@
     window.addEventListener('sceneready', () => {
       placeHeroText();
       document.fonts.ready.then(placeHeroText); // the web fonts change the text's size
+      // retire the still once the live painting has finished fading in over it
+      setTimeout(() => $('.hero-still').classList.add('retired'), 1000);
     });
 
     let resizeTimer = 0;
