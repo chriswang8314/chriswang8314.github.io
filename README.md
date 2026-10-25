@@ -49,7 +49,7 @@ there and reload; you never need to touch the layout code.
 | `index.html` | Page structure and meta tags |
 | `content.js` | Every word on the page |
 | `site.js` | Renders the content, nav, nocturne theme, hero text placement |
-| `scene.js` | The painting (sky, sun, town, wheat) and the time slider |
+| `scene.js` | The painting (sky, sun, town, wheat, the wind in the sky and smoke) and the time slider |
 | `style.css` | Layout, typography and the three themes |
 | `hero.webp`, `hero-960.webp` | A still of the painting shown instantly while the live one renders (the smaller one for phones) |
 | `og-image.jpg` | 1200×630 link preview image |

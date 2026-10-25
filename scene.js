@@ -16,6 +16,10 @@
  *  - The field's broad warm and lemon masses, stroke size and stroke direction
  *    all follow low-frequency noise. The near strokes sway in a rolling wind,
  *    part around the cursor and get swept along when you drag through them.
+ *  - A gentle breeze moves the sky and the chimney smoke: loose strokes drift
+ *    and swirl over the painted sky, the sun's halo turns and breathes, and
+ *    the smoke rises, bends and billows with the gusts. Under
+ *    prefers-reduced-motion the painting stays still.
  *
  * Colours were sampled region by region from the painting (k-means), with
  * the vermilion accents that pixel averaging washes out added back.
@@ -37,6 +41,7 @@
   const timeLabel = document.getElementById('time-label');
   const nowBtn = document.getElementById('time-now');
   const hint = document.getElementById('hint');
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
   // ---------- helpers ----------
 
@@ -468,7 +473,7 @@
   async function buildScene() {
     const id = ++buildId, alive = () => id === buildId;
     sunKey = '';
-    const stages = [buildStrokeSprites, buildSkyTexture, buildTown, buildField, buildGrain, buildStars, buildFireflies, buildMoon, buildStarHalo, buildSun];
+    const stages = [buildStrokeSprites, buildSkyTexture, buildTown, buildField, buildGrain, buildStars, buildFireflies, buildMoon, buildStarHalo, buildSun, buildWind];
     for (const stage of stages) {
       if (!(await runSliced(stage(), alive))) return false;
       await nextTask();
@@ -659,6 +664,12 @@
     dabs.sort((a, b) => a.t - b.t); // back to front
   }
 
+  // the sky's broad swirling flow lines, which its strokes (painted and drifting) follow
+  const skyFlow = (x, y) => {
+    const swirl = fbm(x * 0.0016, y * 0.004);
+    return (swirl - 0.5) * 2.6 + Math.sin(y * 0.012 + swirl * 5) * 0.35;
+  };
+
   // Sky strokes laid over the hour's sky colour: light, deep blue, turquoise
   // and pale yellow, translucent so the same texture works at any hour, of
   // varied size and following broad swirling flow lines.
@@ -673,8 +684,7 @@
     for (let i = 0; i < n; i++) {
       if (i % 30 === 29) yield;
       const x = rng() * W, y = rng() * horizonY, f = y / horizonY;
-      const swirl = fbm(x * 0.0016, y * 0.004);
-      const angle = (swirl - 0.5) * 2.6 + Math.sin(y * 0.012 + swirl * 5) * 0.35;
+      const angle = skyFlow(x, y);
       const size = 0.6 + fbm(x * 0.003 + 40, y * 0.006) * 1.1;
       const len = (26 + rng() * 40) * u * size;
       const r = rng();
@@ -776,7 +786,10 @@
     const pick = (list) => list[(rng() * list.length) | 0];
     const tone = (list) => shadeRGB(pick(list), 0.94 + rng() * 0.12); // a narrow value range within each shape
     const sw = clamp(k0 * 0.32, 2.6, 5); // the brush, scaled down for the town
-    const windows = [], footprints = [], tops = [];
+    const windows = [], footprints = [], tops = [], chimneys = [];
+    // with the wind on, the smoke rises live from the chimneys instead; its
+    // strokes are still brushed (off to one side) so the town comes out the same
+    const sg = windOn ? offscreen(1, 1)[1] : g;
 
     // lay the sections out across the screen; extra width on wide screens
     // goes to the stretchable ones
@@ -874,7 +887,7 @@
         const x = cx - p * k0 * (plume ? 9 : 4) - Math.sin(p * 5.5) * k0 * 1.2 * p;
         const y = cy - p * hU * (plume ? 13 : 7) + Math.sin(p * 4) * hU * 0.8 * p;
         for (let s = 0; s < (plume ? 3 : 1); s++) {
-          paintStroke(g, rng, {
+          paintStroke(sg, rng, {
             x: x + (rng() - 0.5) * k0 * p, y: y + (rng() - 0.5) * hU * p,
             angle: Math.PI + 0.5 * Math.sin(p * 8 + s) - 0.3, len: (plume ? 1.2 + p * 2.6 : 0.8 + p) * k0,
             width: (plume ? 0.5 + p * 1.6 : 0.3 + p * 0.4) * k0, bend: 0.35,
@@ -941,7 +954,10 @@
           [shadeRGB(TOWN.near[0], 0.7)], 0);
         rim([x0, base], [cx - tw / 2, yt], -1);
         rim([x0 + w, base], [cx + tw / 2, yt], 1);
-        if (e.smoke) smoke(cx, yt, e.smoke === 'plume');
+        if (e.smoke) {
+          smoke(cx, yt, e.smoke === 'plume');
+          chimneys.push({ x: cx, y: yt, w: tw, plume: e.smoke === 'plume' });
+        }
       },
 
       *shed(e, x0, w, h) {
@@ -1088,7 +1104,7 @@
 
     townTint.width = c.width;
     townTint.height = c.height;
-    town = { canvas: c, rimL, rimR, top, h: c.height / dpr, glows: windows, glowSize: Math.max(8, hU * 2), tops, hU };
+    town = { canvas: c, rimL, rimR, top, h: c.height / dpr, glows: windows, glowSize: Math.max(8, hU * 2), tops, hU, k0, chimneys };
   }
 
   // a fine canvas weave with a little grain, laid over the whole image
@@ -1139,6 +1155,323 @@
       ph: rand(0, TAU),
       sp: rand(0.6, 1.4),
     }));
+  }
+
+  // ---------- wind ----------
+  // One breeze moves the sky and the smoke. It blows to the left at a slow
+  // base speed that strengthens and eases in gusts every 6–12 s (never past
+  // 1.8× the base), and the curl of a slowly shifting noise field adds swirl.
+  // Curl noise is divergence-free, so strokes and smoke eddy and turn without
+  // bunching up or thinning out. The painted sky underneath never changes: a
+  // few hundred loose strokes drift over it on their own layer, each stamped
+  // from a stroke pre-painted with the same brush and coloured from the sky
+  // beneath it. Under prefers-reduced-motion none of this runs, and the town
+  // keeps its painted smoke instead.
+
+  const WIND_SPEED = 11; // px/s on a 1440 px wide screen, before gusts
+  const WIND_STAMPS = 24, SMOKE_STAMPS = 8;
+  const LOOK_W = 64, LOOK_H = 24; // the grid the sky's colour is sampled on
+  const HALO_TURN = TAU / 300; // the halos turn once every five minutes
+  const LIFT_DAY = [248, 250, 232], DEEP_DAY = [26, 56, 140]; // what strokes lighten or deepen toward
+  const LIFT_NIGHT = [84, 110, 180], DEEP_NIGHT = [8, 14, 52];
+  const SMOKE_NIGHT = [118, 130, 168]; // a lighter grey-blue against the night sky
+
+  let windOn = !reduceMotion.matches, windT = 0, windGust = 1, windScale = 1, windSpeed = WIND_SPEED;
+  let windRng = mulberry32(101), windDirty = false, windKey = '', recolorT = -1, retintAt = 0, retintAll = 0, windMs = 0;
+  let windStamps = [], windStrokes = [], smokeStamps = [], smokeTinted = [], puffs = [], emitters = [];
+  let texLook = null;
+  const skyLook = new Float32Array(LOOK_W * LOOK_H * 3);
+  const [windBuf, windCtx] = offscreen(1, 1);
+  const [smokeBuf, smokeCtx] = offscreen(1, 1);
+  const curl = [0, 0];
+
+  // gust strength over time: 1 (calm) to 1.8, from two octaves of slow noise
+  const gustAt = (t) => 1 + 0.8 * smooth(0.3, 0.75, noise2(t / 9, 0.5) * 0.7 + noise2(t / 3.7, 4.5) * 0.3);
+
+  // swirl: the curl of a slowly drifting noise field (magnitude about 0–1.5)
+  function curlAt(x, y, t, out) {
+    const f = 0.0032, u = x * f + t * 0.011, v = y * f - t * 0.007, e = 0.05;
+    out[0] = (noise2(u, v + e) - noise2(u, v - e)) / (2 * e);
+    out[1] = -(noise2(u + e, v) - noise2(u - e, v)) / (2 * e);
+  }
+
+  // how many strokes drift over the sky: about 250 on a laptop, 100 on a phone
+  const windTarget = () => Math.round(clamp((W * horizonY) / 2400, 100, 250) * windScale);
+
+  // pale grey strokes, coloured later by multiplying in the sky's colour
+  function paintStamp(rng, len, width, bend) {
+    const pad = 3, w = len + pad * 2, h = width * 1.2 + Math.abs(bend) * len * 2 + pad * 2;
+    const [c, g] = offscreen(w * dpr, h * dpr);
+    g.scale(dpr, dpr);
+    paintStroke(g, rng, { x: pad, y: h / 2, angle: 0, len, width, bend, color: [236, 236, 236], streak: rng() < 0.6 ? [204, 204, 204] : null });
+    return c;
+  }
+
+  // a copy of a grey stamp in one colour, keeping its bristle light and shade
+  function tintInto(c, stamp, color) {
+    c = c || document.createElement('canvas');
+    if (c.width !== stamp.width || c.height !== stamp.height) {
+      c.width = stamp.width;
+      c.height = stamp.height;
+    }
+    const g = c.getContext('2d');
+    g.globalCompositeOperation = 'copy';
+    g.drawImage(stamp, 0, 0);
+    g.globalCompositeOperation = 'multiply';
+    g.fillStyle = rgb(shadeRGB(color, 1.13)); // the stamp's greys average about 0.88
+    g.fillRect(0, 0, c.width, c.height);
+    g.globalCompositeOperation = 'destination-in';
+    g.drawImage(stamp, 0, 0);
+    g.globalCompositeOperation = 'source-over';
+    return c;
+  }
+
+  function* buildWind() {
+    puffs = [];
+    windStrokes = [];
+    if (!windOn) return;
+    const rng = mulberry32(41), u = clamp(Math.min(W, H) / 800, 0.6, 1.3), { k0, hU } = town;
+    windRng = mulberry32(101); // the same start on every load
+    windSpeed = WIND_SPEED * clamp(W / 1440, 0.45, 1.2);
+    windStamps = [];
+    for (let i = 0; i < WIND_STAMPS; i++) {
+      const len = (28 + (i % 6) * 9 + rng() * 8) * u;
+      windStamps.push(paintStamp(rng, len, len * (0.15 + rng() * 0.09), (rng() - 0.5) * 0.24));
+      yield;
+    }
+    // curling smoke strokes, painted at their full grown size
+    smokeStamps = [];
+    for (let i = 0; i < SMOKE_STAMPS; i++) {
+      smokeStamps.push(paintStamp(rng, k0 * (2.4 + rng() * 0.8), k0 * (1 + rng() * 0.4), 0.3 + rng() * 0.15));
+      yield;
+    }
+    smokeTinted = [];
+
+    // the painted sky texture, shrunk to the lookup grid once
+    const [, lg] = offscreen(LOOK_W, LOOK_H);
+    lg.imageSmoothingQuality = 'high';
+    lg.drawImage(skyTex, 0, 0, LOOK_W, LOOK_H);
+    texLook = lg.getImageData(0, 0, LOOK_W, LOOK_H).data;
+    recolor();
+    yield;
+
+    windT = 0;
+    recolorT = -1;
+    const n = windTarget();
+    for (let i = 0; i < n; i++) {
+      const s = {};
+      spawnStroke(s, true);
+      windStrokes.push(s);
+      if (i % 25 === 24) yield;
+    }
+
+    // each chimney at its own pace; the tall one on the right only a thin wisp
+    emitters = town.chimneys.map((c, i) => ({
+      ...c, acc: rng(), phase: rng() * TAU,
+      rate: c.plume ? 10 - i * 1.5 : 7, life: c.plume ? [6, 10] : [5, 8], grow: c.plume ? [2.2, 3] : [2, 2.5],
+      peak: c.plume ? 0.2 : 0.05, size: c.plume ? 1 : 0.5,
+      rise: (c.plume ? 3 : 2.2) * hU, drift: (c.plume ? 1.4 : 0.8) * k0, swirl: (c.plume ? 0.35 : 0.25) * k0,
+    }));
+    // run the smoke for ten seconds first, so the plumes are already up
+    for (windT = -10; windT < 0; windT += 1 / 30) updateSmoke(1 / 30, gustAt(windT));
+    windT = 0;
+    windDirty = true;
+  }
+
+  // The base sky's colour on the lookup grid, as drawn for this hour: the
+  // gradient under the painted texture. Recolours the strokes and smoke to suit.
+  function recolor() {
+    windKey = lightKey();
+    const k = 1 - light.dark * 0.35;
+    for (let j = 0; j < LOOK_H; j++) {
+      const f = (j + 0.5) / LOOK_H;
+      const grad = f < 0.6 ? mixRGB(light.top, light.mid, f / 0.6) : mixRGB(light.mid, light.horizon, (f - 0.6) / 0.4);
+      for (let i = 0; i < LOOK_W; i++) {
+        const p = (j * LOOK_W + i) * 4, q = (j * LOOK_W + i) * 3, a = (texLook[p + 3] / 255) * k;
+        for (let c = 0; c < 3; c++) skyLook[q + c] = texLook[p + c] * a + grad[c] * (1 - a);
+      }
+    }
+    // the smoke takes the hour's light like the town, but turns a lighter grey-blue at night
+    const lit = (c) => c.map((v, i) => (v * light.tint[i]) / 255);
+    const colors = TOWN.smoke.map((c) => mixRGB(lit(c), SMOKE_NIGHT, light.dark * 0.85));
+    colors.push(mixRGB(colors[1], mixRGB(lit([196, 202, 218]), SMOKE_NIGHT, light.dark * 0.6), 0.4)); // the wisp, lighter
+    smokeTinted = colors.map((c, ci) => smokeStamps.map((stamp, i) => tintInto(smokeTinted[ci]?.[i], stamp, c)));
+    retintAll = windStrokes.length; // the strokes follow over the next few frames
+    windDirty = true;
+  }
+
+  const lightKey = () =>
+    light.top.concat(light.mid, light.horizon, light.tint).map((v) => Math.round(v / 3)).join() + light.dark.toFixed(2);
+
+  function sampleSky(x, y) {
+    const fx = clamp((x / W) * LOOK_W - 0.5, 0, LOOK_W - 1.001), fy = clamp((y / horizonY) * LOOK_H - 0.5, 0, LOOK_H - 1.001);
+    const i = fx | 0, j = fy | 0, tx = fx - i, ty = fy - j, q = (j * LOOK_W + i) * 3, r = q + LOOK_W * 3;
+    const out = [0, 0, 0];
+    for (let c = 0; c < 3; c++) {
+      out[c] = lerp(lerp(skyLook[q + c], skyLook[q + 3 + c], tx), lerp(skyLook[r + c], skyLook[r + 3 + c], tx), ty);
+    }
+    return out;
+  }
+
+  // the sky's colour under a stroke, a little lighter or deeper (deeper blues at night)
+  const windColor = (s) =>
+    mixRGB(sampleSky(s.x, s.y), s.shade > 0 ? mixRGB(LIFT_DAY, LIFT_NIGHT, light.dark) : mixRGB(DEEP_DAY, DEEP_NIGHT, light.dark), Math.abs(s.shade));
+
+  // Sets a stroke off from a fresh spot: the best of three candidates, the
+  // one furthest from the others, so the strokes stay evenly spread. Some
+  // start off the right edge and drift in.
+  function spawnStroke(s, midLife) {
+    let bx = 0, by = 0, best = -1;
+    for (let k = 0; k < 3; k++) {
+      const x = -20 + windRng() * (W + windSpeed * 6 + 20), y = windRng() * horizonY * 0.95;
+      let d = Infinity;
+      for (const o of windStrokes) if (o !== s) d = Math.min(d, (o.x - x) ** 2 + (o.y - y) ** 2);
+      if (d > best) [best, bx, by] = [d, x, y];
+    }
+    Object.assign(s, {
+      x: bx, y: by, stamp: (windRng() * WIND_STAMPS) | 0,
+      life: 8 + windRng() * 7, fadeIn: 2 + windRng(), fadeOut: 2 + windRng(), peak: 0.4 + windRng() * 0.4,
+      scale: 0.8 + windRng() * 0.45, sf: 0.75 + windRng() * 0.5, shade: (windRng() < 0.5 ? 1 : -1) * (0.06 + windRng() * 0.08),
+    });
+    s.age = midLife ? windRng() * s.life : 0;
+    windVelocity(s, windGust, sunAt(hour));
+    s.a = Math.atan2(s.vy, s.vx);
+    s.color = windColor(s);
+    s.canvas = tintInto(s.canvas, windStamps[s.stamp], s.color);
+  }
+
+  // Along the sky's flow lines, heading left with the wind, plus swirl; near
+  // the sun, drawn a little into the halo's slow circling.
+  function windVelocity(s, gust, sun) {
+    const fa = skyFlow(s.x, s.y);
+    let fx = Math.cos(fa), fy = Math.sin(fa);
+    if (fx > 0) [fx, fy] = [-fx, -fy];
+    curlAt(s.x, s.y, windT, curl);
+    const sp = windSpeed * s.sf * gust * (1 - light.dark * 0.2); // a little slower at night
+    let vx = (0.6 * fx - 0.4 + 0.3 * curl[0]) * sp, vy = (0.6 * fy + 0.3 * curl[1]) * sp;
+    if (sun) {
+      const dx = s.x - sun.x, dy = s.y - sun.y, d = Math.hypot(dx, dy);
+      const pull = 0.7 * (1 - smooth(sun.r * 1.5, sun.r * 5, d));
+      if (pull > 0 && d > 1) {
+        const m = Math.hypot(vx, vy);
+        vx = lerp(vx, (-dy / d) * m, pull);
+        vy = lerp(vy, (dx / d) * m, pull);
+      }
+    }
+    s.vx = vx;
+    s.vy = vy;
+  }
+
+  function updateWind(dt) {
+    const t0 = performance.now();
+    windT += dt;
+    windGust = gustAt(windT);
+    // when the hour's light changes, recolour, at most five times a second
+    if (lightKey() !== windKey && windT - recolorT > 0.2) {
+      recolorT = windT;
+      recolor();
+    }
+    const sun = sunAt(hour), target = windTarget();
+    for (let i = windStrokes.length - 1; i >= 0; i--) {
+      const s = windStrokes[i];
+      s.age += dt;
+      if (s.age >= s.life) {
+        // faded out: set off again somewhere else, unless there are too many
+        if (windStrokes.length > target) {
+          windStrokes.splice(i, 1);
+          continue;
+        }
+        spawnStroke(s, false);
+      }
+      windVelocity(s, windGust, sun);
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      // turn smoothly to face the way it's moving
+      let da = Math.atan2(s.vy, s.vx) - s.a;
+      da -= TAU * Math.round(da / TAU);
+      s.a += da * Math.min(1, dt * 2);
+    }
+    while (windStrokes.length < target) {
+      const s = {};
+      spawnStroke(s, false);
+      windStrokes.push(s);
+    }
+    // A few strokes a frame take on the colour of the sky they've drifted
+    // over; after the hour's light changes, all of them, 64 a frame.
+    const all = retintAll > 0, n = all ? Math.min(retintAll, 64) : Math.ceil(windStrokes.length / 30);
+    for (let k = n; k > 0 && windStrokes.length; k--) {
+      const s = windStrokes[retintAt++ % windStrokes.length], c = windColor(s);
+      if (all || Math.abs(c[0] - s.color[0]) + Math.abs(c[1] - s.color[1]) + Math.abs(c[2] - s.color[2]) > 6) {
+        s.color = all ? c : mixRGB(s.color, c, 0.5);
+        tintInto(s.canvas, windStamps[s.stamp], s.color);
+      }
+    }
+    if (all) retintAll -= n;
+    updateSmoke(dt, windGust);
+    windDirty = true;
+    windMs += performance.now() - t0;
+  }
+
+  // Smoke rises from each chimney, slowing as it cools, and bends over with
+  // the wind; gusts push it further sideways and the swirl makes it billow.
+  function updateSmoke(dt, gust) {
+    for (const e of emitters) {
+      e.acc += dt * e.rate * windScale * (1 + 0.3 * Math.sin(windT * 0.9 + e.phase));
+      for (; e.acc >= 1; e.acc--) {
+        puffs.push({
+          e, x: e.x + (windRng() - 0.5) * e.w * 0.6, y: e.y, age: 0, life: lerp(e.life[0], e.life[1], windRng()),
+          grow: lerp(e.grow[0], e.grow[1], windRng()), a0: Math.PI - 0.3 + (windRng() - 0.5), spin: (windRng() - 0.5) * 0.08,
+          stamp: (windRng() * SMOKE_STAMPS) | 0, color: e.plume ? (windRng() * 3) | 0 : 3, peak: e.peak * (0.7 + windRng() * 0.6),
+        });
+      }
+    }
+    let n = 0;
+    for (const p of puffs) {
+      p.age += dt;
+      if (p.age >= p.life) continue;
+      const e = p.e, a = p.age, stir = e.swirl * Math.min(1, a / 2);
+      curlAt(p.x, p.y, windT, curl);
+      p.x += (-e.drift * gust * (1 - Math.exp(-a / 0.8)) + curl[0] * stir) * dt;
+      p.y += (-e.rise * (Math.exp(-a / 3) + 0.15) + curl[1] * stir) * dt;
+      puffs[n++] = p; // kept in order, so overlapping puffs never swap
+    }
+    puffs.length = n;
+  }
+
+  // the moving strokes and the smoke, each onto its own layer over the sky
+  function renderWind() {
+    const t0 = performance.now(), night = 1 - light.dark * 0.35, stretch = 1 + 0.18 * (windGust - 1);
+    let g = windCtx;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, windBuf.width, windBuf.height);
+    for (const s of windStrokes) {
+      const alpha = s.peak * night * smooth(0, s.fadeIn, s.age) * (1 - smooth(s.life - s.fadeOut, s.life, s.age)) *
+        (1 - smooth(horizonY * 0.86, horizonY, s.y)); // thinning out toward the town
+      if (alpha < 0.004) continue;
+      const c = s.canvas, cos = Math.cos(s.a), sin = Math.sin(s.a), sx = s.scale * stretch, sy = s.scale;
+      g.globalAlpha = alpha;
+      g.setTransform(cos * sx, sin * sx, -sin * sy, cos * sy, s.x * dpr, s.y * dpr);
+      g.drawImage(c, -c.width / 2, -c.height / 2);
+    }
+    g.globalAlpha = 1;
+
+    // each puff grows two to three times over, turns a little and thins out as it rises
+    g = smokeCtx;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, smokeBuf.width, smokeBuf.height);
+    for (const p of puffs) {
+      const f = p.age / p.life, alpha = p.peak * smooth(0, 0.02, f) * Math.pow(1 - f, 1.4);
+      if (alpha < 0.004) continue;
+      const img = smokeTinted[p.color][p.stamp];
+      const size = p.e.size * (1 / p.grow + (1 - 1 / p.grow) * (1 - (1 - f) ** 2));
+      const ang = p.a0 + p.spin * p.age, cos = Math.cos(ang) * size, sin = Math.sin(ang) * size;
+      g.globalAlpha = alpha;
+      g.setTransform(cos, sin, -sin, cos, p.x * dpr, p.y * dpr);
+      g.drawImage(img, -img.width / 2, -img.height / 2);
+    }
+    g.globalAlpha = 1;
+    windDirty = false;
+    windMs += performance.now() - t0;
   }
 
   // ---------- simulation ----------
@@ -1267,12 +1600,14 @@
 
   function draw(time) {
     if (!W || !H) return; // canvas not laid out yet
+    if (windOn && windDirty) renderWind();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     // below the sky only paint stays; everywhere else the page shows through
     ctx.clearRect(0, horizonY, W, CH - horizonY);
     const sun = sunAt(hour);
     drawSky(time, sun);
     drawTown(sun);
+    if (windOn) ctx.drawImage(smokeBuf, 0, 0, W, horizonY);
     drawSurface(ctx, sun, 0, horizonY + 10); // the field covers everything below this
     drawField(sun);
     drawTownLights(time);
@@ -1290,6 +1625,7 @@
     ctx.globalAlpha = 1 - light.dark * 0.35;
     ctx.drawImage(skyTex, 0, 0, W, horizonY);
     ctx.globalAlpha = 1;
+    if (windOn) ctx.drawImage(windBuf, 0, 0, W, horizonY);
 
     if (light.dark > 0.01) {
       drawStars(time);
@@ -1304,9 +1640,27 @@
         sunKey = key;
         sunSprite = renderOrb(sun.color, mixRGB(sun.color, [255, 250, 226], 0.55), light.mid, 0.9);
       }
-      const s = (sun.r / ORB_R) * (sunSprite.width / 2);
-      ctx.drawImage(sunSprite, sun.x - s, sun.y - s, s * 2, s * 2);
+      drawHalo(sunSprite, sun.x, sun.y, (sun.r / ORB_R) * (sunSprite.width / 2), 1);
     }
+  }
+
+  // A painted halo (with whatever it surrounds), turning very slowly with the
+  // wind's clock and gently brightening and dimming, ±5%. At rest it's drawn
+  // exactly as painted.
+  function drawHalo(img, x, y, half, alpha) {
+    const spin = windT * HALO_TURN, pulse = 0.05 * Math.sin((windT * TAU) / 8);
+    const cos = Math.cos(spin) * dpr, sin = Math.sin(spin) * dpr;
+    ctx.setTransform(cos, sin, -sin, cos, x * dpr, y * dpr);
+    ctx.globalAlpha = alpha * (1 + Math.min(0, pulse));
+    ctx.drawImage(img, -half, -half, half * 2, half * 2);
+    if (pulse > 0) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = alpha * pulse;
+      ctx.drawImage(img, -half, -half, half * 2, half * 2);
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.globalAlpha = 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
   function drawStars(time) {
@@ -1316,9 +1670,8 @@
       const twinkle = 0.7 + 0.3 * Math.sin(time * 0.001 * s.tw + s.ph);
       const fade = 1 - (s.y / horizonY) * 0.55;
       if (s.r > 1.9) {
-        const size = s.r * 24;
-        ctx.globalAlpha = dark * 0.55;
-        ctx.drawImage(starHalo, s.x - size / 2, s.y - size / 2, size, size);
+        // the halo turns and breathes like the sun's, with its own slow twinkle
+        drawHalo(starHalo, s.x, s.y, s.r * 12, dark * 0.55 * (1 + 0.08 * Math.sin(windT * 0.45 * s.tw)));
       }
       if (s.glow > 0.03 || s.r > 1.6) {
         const size = s.r * (6 + s.glow * 18);
@@ -1580,6 +1933,16 @@
       if (moon) orbs.push({ x: moon.x, y: moon.y, r: moon.r * 3 });
       return { orbs, skyline: town.tops, horizonY };
     },
+
+    // recent frame times (ms of work per frame, all and wind only), for checking performance
+    stats() {
+      const n = Math.min(perfI, PERF_N), f = frameTimes.subarray(0, n), w = windTimes.subarray(0, n);
+      const avg = (a) => a.reduce((sum, v) => sum + v, 0) / (a.length || 1);
+      return {
+        frames: perfI, running, wind: windOn, strokes: windStrokes.length, smoke: puffs.length, scale: windScale,
+        frameAvg: avg(f), frameMax: Math.max(0, ...f), windAvg: avg(w), windMax: Math.max(0, ...w),
+      };
+    },
   };
 
   // ---------- input ----------
@@ -1628,11 +1991,16 @@
     horizonY = Math.round(H * HORIZON);
     fieldH = H - horizonY;
     density = W < 640 ? 0.5 : 1;
+    windOn = !reduceMotion.matches;
     ready = false;
     if (!(await buildScene())) return;
     canvas.width = fieldBuf.width = maskBuf.width = Math.round(W * dpr);
     canvas.height = Math.round(CH * dpr);
     fieldBuf.height = maskBuf.height = Math.round((CH - fieldTopY) * dpr);
+    windBuf.width = smokeBuf.width = windOn ? canvas.width : 1;
+    windBuf.height = smokeBuf.height = windOn ? Math.round(horizonY * dpr) : 1;
+    windDirty = true;
+    checkSky();
     ready = true;
     draw(simTime);
     if (!shown) {
@@ -1648,6 +2016,8 @@
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => resize(false), 200);
   });
+  // turning reduced motion on or off repaints with or without the wind
+  reduceMotion.addEventListener('change', () => resize(true));
 
   // ?hour=18.75 previews a time of day; ?mode=day / ?mode=night still work
   const params = new URLSearchParams(location.search);
@@ -1666,12 +2036,16 @@
     emitTime();
   }, 500);
 
-  // the loop only runs while the painting is on screen
-  let last = performance.now(), acc = 0, simTime = 0, visible = true, running = false;
+  // The loop only runs while the painting is on screen, and the wind only
+  // while the sky is. After a pause everything carries on from where it was.
+  let last = performance.now(), acc = 0, simTime = 0, visible = true, running = false, skyInView = true;
+  const checkSky = () => (skyInView = window.scrollY < heroEl.offsetTop + horizonY);
+  window.addEventListener('scroll', checkSky, { passive: true });
   function start() {
     if (running || !ready || !visible || document.hidden) return;
     running = true;
-    last = performance.now();
+    last = perfFrom = performance.now();
+    perfSum = perfN = 0;
     requestAnimationFrame(frame);
   }
   function frame(now) {
@@ -1679,15 +2053,37 @@
       running = false;
       return;
     }
-    acc += Math.min(100, now - last);
+    const t0 = performance.now(), dt = Math.min(100, now - last);
+    acc += dt;
     last = now;
     while (acc >= STEP) {
       simTime += STEP;
       step(simTime);
       acc -= STEP;
     }
+    windMs = 0;
+    if (windOn && skyInView) updateWind(Math.min(dt, 50) / 1000);
     draw(simTime);
+    trackFrame(performance.now() - t0, now);
     requestAnimationFrame(frame);
+  }
+
+  // Keeps to the frame budget: if a frame's work averages over 12 ms for two
+  // seconds, there are 30% fewer drifting strokes and smoke puffs from then on
+  // (strokes leave only once they've faded out). The last 600 frames' times
+  // are kept for paintedScene.stats().
+  const PERF_N = 600, frameTimes = new Float32Array(PERF_N), windTimes = new Float32Array(PERF_N);
+  let perfI = 0, perfSum = 0, perfN = 0, perfFrom = 0;
+  function trackFrame(ms, now) {
+    frameTimes[perfI % PERF_N] = ms;
+    windTimes[perfI % PERF_N] = windMs;
+    perfI++;
+    perfSum += ms;
+    perfN++;
+    if (now - perfFrom < 2000) return;
+    if (perfSum / perfN > 12 && windScale > 0.3) windScale *= 0.7;
+    perfSum = perfN = 0;
+    perfFrom = now;
   }
   new IntersectionObserver(([entry]) => {
     visible = entry.isIntersecting;
