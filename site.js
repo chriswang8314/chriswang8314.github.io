@@ -106,15 +106,20 @@
     }
   }
 
-  // a scene with a fixed spot for the text (x, y and the lowest it may
-  // reach, in % of the hero): returns how far past that it still runs
+  // a scene with a fixed spot for the text (x, y, the lowest it may reach
+  // and, optionally, the furthest right, in % of the hero): returns how far
+  // past that it still runs
   function placeFixed(region) {
     const W = hero.clientWidth, H = hero.clientHeight;
-    const h = heroText.offsetHeight, narrow = W <= 640;
+    const w = heroText.offsetWidth, h = heroText.offsetHeight, narrow = W <= 640;
     const margin = narrow ? 16 : Math.max(24, W * 0.05);
-    const tc = timeControl.getBoundingClientRect();
-    const x = narrow ? margin : Math.max(margin, (W * region.x) / 100);
-    const y = narrow ? tc.bottom + 14 : Math.max(64, (H * region.y) / 100);
+    const tc = timeControl.getBoundingClientRect(), controls = timeControl.parentElement.getBoundingClientRect();
+    let x = narrow ? margin : Math.max(margin, (W * region.x) / 100);
+    // moved left as far as it must to keep within its right edge
+    if (!narrow && region.maxRight) x = Math.max(margin, Math.min(x, (W * region.maxRight) / 100 - w));
+    let y = narrow ? tc.bottom + 14 : Math.max(64, (H * region.y) / 100);
+    // and kept below the controls if it reaches under them
+    if (!narrow && x + w > controls.left - 8) y = Math.max(y, controls.bottom + 14);
     // keep above whatever the scene reports in the way (its sails, say)
     const obs = scene.obstacles();
     let floor = (H * region.maxBottom) / 100;
@@ -123,7 +128,8 @@
     heroText.style.top = `${y}px`;
     heroText.classList.add('placed');
     placedHour = scene.hour;
-    return Math.max(0, y + h - floor);
+    // too low, or pushed left of its spot by the right edge: either asks for the compact card
+    return Math.max(0, y + h - floor, narrow ? 0 : (W * region.x) / 100 - x - 8);
   }
 
   // puts the text in the clearest spot, returning how badly it still collides

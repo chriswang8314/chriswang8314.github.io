@@ -26,7 +26,8 @@ export function createGovernor(target, { onWake, onMotionChange }) {
   const ac = new AbortController();
 
   const gov = {
-    quality: 1,
+    // ?quality=0.5 starts as if the frames had run long, to try a scene's lighter modes
+    quality: Math.min(1, Math.max(0.3, Number(new URLSearchParams(location.search).get('quality')) || 1)),
     get motion() {
       return !reduceMotion.matches;
     },

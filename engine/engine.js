@@ -16,7 +16,7 @@ import { createStage, STEP } from './stage.js';
 import {
   REVEAL, REVEAL_LATE, PAINT, ERASE, revealEnd, revealFront, planReveal, revealMapSteps, createMaskGL, createMask2D, maskScale2D,
 } from './reveal.js';
-import { offscreen, release } from './util.js';
+import { offscreen, release, isPromise } from './util.js';
 import { SCENES, DEFAULT_SCENE, thumb } from '../scenes/index.js';
 
 const params = new URLSearchParams(location.search);
@@ -182,10 +182,13 @@ function background(steps, alive, label = '') {
 
 // Each chore's next step is started only if steps like its last few fit in
 // what's left of the frame; one that has waited eight frames runs regardless.
+// A step may hand back a promise (work done in a worker): its chore waits
+// for it, holding the queue, without spending the frames' time.
 function work(until) {
   let ran = false;
   while (chores.length) {
     const c = chores[0], now = performance.now();
+    if (c.waiting) break;
     if (now + (c.est || 0) > until && !(c.starved > 8 && !ran)) {
       c.starved = (c.starved || 0) + 1;
       break;
@@ -193,7 +196,17 @@ function work(until) {
     let done = !c.it;
     if (c.alive()) {
       try {
-        done = done || c.it.next().done;
+        if (!done) {
+          const step = c.it.next();
+          done = step.done;
+          if (!done && isPromise(step.value)) {
+            c.waiting = true;
+            step.value.then(null, () => {}).then(() => {
+              c.waiting = false;
+              if (!running) kick();
+            });
+          }
+        }
         const took = performance.now() - now;
         c.est = Math.max(took, (c.est || 0) * 0.8);
         c.starved = 0;
@@ -218,7 +231,7 @@ function work(until) {
 }
 
 function kick() {
-  if (choreTimer || !chores.length) return;
+  if (choreTimer || !chores.length || chores[0].waiting) return;
   choreTimer = setTimeout(() => {
     choreTimer = 0;
     if (running) return; // the frames take over

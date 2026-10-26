@@ -1,9 +1,10 @@
 # Christopher Wang — personal site
 
-A single-page resume site built around a live painting. Two are on offer
+A single-page resume site built around a live painting. Three are on offer
 from the **Gallery** button over the sky: a Van Gogh–style wheat field
 ("Summer Evening, Wheatfield with Setting Sun", Arles, 1888), shown by
-default, and Monet's "Tulip Fields near The Hague" (1886). The painting
+default, Monet's "Tulip Fields near The Hague" (1886), and Monet's harbour of
+moored sailboats ("Sailboats", c. 1866). The painting
 follows the visitor's local time; the slider in the corner (or the
 **nocturne** toggle in the nav) changes the hour, and the page below takes its
 colours from the painting and the hour.
@@ -23,10 +24,14 @@ preview a time of day, and `?scene=tulips` to open a painting (that's also
 how to share a link to one). A visitor's own pick from the gallery is
 remembered in their browser. `?profile` adds each layer's draw time to
 `paintedScene.stats()` in the console, and `?slowmo=20` plays the switch
-between paintings twenty times slower, to look at it closely. On
+between paintings twenty times slower, to look at it closely. `?quality=0.5`
+starts the painting as if its frames had been running long, to see a
+scene's lighter modes. On
 `localhost` (or with `?dev`) the page also checks, during a switch, that the
 hero card's colours only ever change while it's invisible, and logs an
-error to the console if they don't.
+error to the console if they don't, and in the harbour the **R** key turns the
+water's reflections off and on, to measure what they cost
+(`paintedScene.stats().water`).
 
 ## Edit the content
 
@@ -59,7 +64,7 @@ there and reload; you never need to touch the layout code.
 | `content.js` | Every word on the page |
 | `site.js` | Renders the content, nav, nocturne theme, hero text placement, the gallery and the footer credit |
 | `engine/` | The painting engine every scene shares (see below; `engine.js` wires it together) |
-| `scenes/` | One module per painting (`wheat.js`, `tulips.js`), listed in `scenes/index.js` |
+| `scenes/` | One module per painting (`wheat.js`, `tulips.js`, `harbor.js`), listed in `scenes/index.js` |
 | `scenes/stills/` | Each painting's day and night stills, shown instantly while the live one renders, and its gallery thumbnail |
 | `tools/stills.html` | Makes those stills (see "Adding a new painting") |
 | `style.css` | Layout, typography and the default theme (each scene supplies its own page colours) |
@@ -134,7 +139,9 @@ Paint everything that doesn't move once, in `build`, and keep per-frame
 work for what moves. Anything that moves belongs only to an animated layer,
 never painted into a static texture as well. `build` runs in the spare time
 at the end of each frame while another scene is on screen, so yield often:
-every few milliseconds of work at most. A static
+every few milliseconds of work at most. A step may yield a promise (work
+done in a worker, say) and the build waits for it without spending the
+frames' time. A static
 layer is cached by the compositor and redrawn only when its `key` changes; an
 animated one draws every frame and can keep its own buffers (a `keyedCache`
 from `engine/compositor.js` re-renders one only when the light changes).
@@ -150,6 +157,8 @@ from `engine/compositor.js` re-renders one only when the light changes).
 | `engine/light.js` | `relight(g, paint, light)`: lay the hour's tint, desaturation and glaze over a layer painted in daylight colours, instead of repainting it |
 | `engine/stars.js` | `engine.createStars({ brush, style: 'swirl' \| 'soft' })`: place its `layer(z)` and `shootingLayer(z)`; `launch(x, y, wind)` from a tap; `list()` to reflect them |
 | `engine/pointer.js` | `state.pointer`: `x`, `y`, `active`, and smoothed `vx`, `vy` per step |
+| `engine/water.js` | Water: `swellAt(X, Z, t, chop, unit)` (the swell's height and slopes on the water's plane; `planeAt` maps a screen point onto it), `SWELL_GLSL` (the same, for a shader), `paintReflection` (Monet's painted reflection of what's above, flipped), `createWaterGL()` (one pass moving a reflection buffer by the swell; `drawStrips` without WebGL). The harbour shows how they fit together |
+| `engine/bake.js` | `bake(import.meta.url, 'name', args)`: runs a generator the scene exports in a worker (slow one-off painting) and hands back its canvases as ImageBitmaps; `bitmaps()` to send it images |
 | `engine/governor.js` | `state.quality` (1, dropping to 0.3 if frames run long): scale optional work by it. `state.motion` is false under reduced motion: paint the scene still |
 
 The engine also handles the time slider, pausing off screen, the DPR cap,
