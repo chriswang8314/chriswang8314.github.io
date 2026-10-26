@@ -8,7 +8,9 @@
   'use strict';
 
   const C = window.CONTENT;
-  const scene = window.paintedScene;
+  // the painting engine (engine/engine.js, a module) arrives a moment after
+  // this script: the words go on the page first, then this is set (see start)
+  let scene = null;
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, props = {}, children = []) => {
     const node = Object.assign(document.createElement(tag), props);
@@ -90,10 +92,38 @@
   // tries the full-size text first, then a compact version if nothing fits
   function placeHeroText() {
     heroText.classList.remove('compact');
+    const region = scene.scene && scene.scene.layout.heroTextRegion;
+    if (region && region.mode === 'fixed') {
+      if (placeFixed(region) > 0) {
+        heroText.classList.add('compact');
+        placeFixed(region);
+      }
+      return;
+    }
     if (placeAt() > 0) {
       heroText.classList.add('compact');
       placeAt();
     }
+  }
+
+  // a scene with a fixed spot for the text (x, y and the lowest it may
+  // reach, in % of the hero): returns how far past that it still runs
+  function placeFixed(region) {
+    const W = hero.clientWidth, H = hero.clientHeight;
+    const h = heroText.offsetHeight, narrow = W <= 640;
+    const margin = narrow ? 16 : Math.max(24, W * 0.05);
+    const tc = timeControl.getBoundingClientRect();
+    const x = narrow ? margin : Math.max(margin, (W * region.x) / 100);
+    const y = narrow ? tc.bottom + 14 : Math.max(64, (H * region.y) / 100);
+    // keep above whatever the scene reports in the way (its sails, say)
+    const obs = scene.obstacles();
+    let floor = (H * region.maxBottom) / 100;
+    if (obs) for (const [a, b, top] of obs.skyline) if (b > x && a < x + heroText.offsetWidth) floor = Math.min(floor, top - 12);
+    heroText.style.left = `${x}px`;
+    heroText.style.top = `${y}px`;
+    heroText.classList.add('placed');
+    placedHour = scene.hour;
+    return Math.max(0, y + h - floor);
   }
 
   // puts the text in the clearest spot, returning how badly it still collides
@@ -166,19 +196,296 @@
 
   const themeFor = (hour, dark) => (dark > 0.5 ? 'night' : hour >= 17 && hour < 21 ? 'evening' : 'day');
 
+  // the colours themselves come from the scene showing (style.css has the
+  // default scene's day colours, for the moment before it loads)
   function applyTheme(next) {
     if (next === theme) return;
     theme = next;
     root.dataset.theme = next;
     nocturne.setAttribute('aria-pressed', String(next === 'night'));
-    document.querySelector('meta[name="theme-color"]').content = next === 'night' ? '#141B33' : '#2D4F9E';
+    const colors = scene && scene.contentTheme(next);
+    if (!colors) return;
+    for (const [name, value] of Object.entries(colors.vars)) root.style.setProperty(name, value);
+    document.querySelector('meta[name="theme-color"]').content = colors.themeColor;
+  }
+
+  // the hero text's own colours, for scenes whose sky changes under it
+  // from pale to dark (the wheat keeps its blue panel and needs none)
+  let heroVars = [], heroTone = null;
+  function applyHeroTone() {
+    const t = scene.heroTone();
+    if ((t && t.tone) === heroTone) return;
+    heroTone = t && t.tone;
+    for (const name of heroVars) root.style.removeProperty(name);
+    heroVars = t ? Object.keys(t.vars) : [];
+    if (t) for (const [name, value] of Object.entries(t.vars)) root.style.setProperty(name, value);
   }
 
   window.addEventListener('scenetime', (e) => {
+    if (switching) return; // the switch sets the theme (see switchScene)
     const { hour, dark } = e.detail;
     applyTheme(themeFor(hour, dark));
+    applyHeroTone();
     if (placedHour !== null && Math.abs(hour - placedHour) > 0.1) placeHeroText();
   });
+
+  // A new scene brings its own colours, description and credit: the first
+  // scene as the page loads (or one shown without a repaint), here; a switch,
+  // in switchScene.
+  const still = $('.hero-still');
+  function credit({ title, artist, year, description }) {
+    $('#scene-description').textContent = description;
+    const line = $('#footer-scene');
+    line.textContent = `Scene after ${artist}, `;
+    line.append(el('cite', { textContent: title }), ` (${year})`);
+  }
+  window.addEventListener('scenechange', (e) => {
+    const { id } = e.detail;
+    if (switching) return syncGallery(id);
+    credit(e.detail);
+    const current = theme;
+    theme = null;
+    applyTheme(current || themeFor(scene.hour, isNightHour(scene.hour) ? 1 : 0));
+    heroTone = undefined;
+    applyHeroTone();
+    // the first scene wasn't the one asked for (an old saved choice, say): show its own still
+    if (!still.classList.contains('retired') && !still.currentSrc.includes(`/${id}-`)) {
+      const base = `scenes/stills/${id}-${theme === 'night' ? 'night' : 'day'}`;
+      still.srcset = `${base}-960.webp 960w, ${base}.webp 1600w`;
+      still.src = `${base}.webp`;
+    }
+    syncGallery(id);
+    if (placedHour !== null) placeHeroText();
+  });
+
+  // ---------- switching paintings ----------
+  // One routine runs every switch, in strict order, and while it runs it's
+  // the only thing that touches the hero card or the theme:
+  //   1. prepare: the engine gets the new painting ready off screen (nothing visible changes)
+  //   2. hide the card: it fades out in its own colours, then is hidden outright
+  //   3. swap the theme: with the card hidden and nothing on it animating, the
+  //      new painting's colours go on and the card moves to its new place
+  //   4. repaint: the new painting is brushed in, both moving throughout
+  //   5. show the card: it fades in, already in the new colours
+  // Each switch has a token. Picking another painting part-way overtakes it
+  // at its next step, and the new switch carries on from what's on screen.
+
+  let switching = 0, switchCount = 0;
+
+  // resolves once the card's opacity transition ends (or `ms` passes, in case it never does)
+  const cardSettled = (ms) => new Promise((resolve) => {
+    let timer = 0;
+    const done = () => {
+      heroText.removeEventListener('transitionend', onEnd);
+      clearTimeout(timer);
+      resolve();
+    };
+    const onEnd = (e) => e.target === heroText && e.propertyName === 'opacity' && done();
+    heroText.addEventListener('transitionend', onEnd);
+    timer = setTimeout(done, ms);
+  });
+
+  async function hideCard() {
+    if (heroText.classList.contains('card-hidden')) return;
+    heroText.classList.remove('card-in');
+    if (getComputedStyle(heroText).opacity !== '0') {
+      const settled = cardSettled(400);
+      heroText.classList.add('card-out');
+      await settled;
+    } else heroText.classList.add('card-out');
+    heroText.classList.add('card-hidden');
+  }
+
+  async function showCard() {
+    const settled = cardSettled(500);
+    heroText.classList.add('card-in');
+    heroText.classList.remove('card-hidden', 'card-out');
+    await settled;
+    heroText.classList.remove('card-in');
+  }
+
+  // the new painting's colours, description and credit, and the card's
+  // place for it (only ever while the card is hidden)
+  function swapTheme(described) {
+    // the page's colours change over the repaint's length (when any of it is
+    // in view: otherwise at once, sparing every element its own animation)
+    root.style.setProperty('--switch-ms', `${Math.round(scene.revealSeconds() * 1000)}ms`);
+    if ($('main').getBoundingClientRect().top < window.innerHeight) {
+      root.classList.add('scene-switching');
+      getComputedStyle(document.body).color;
+    }
+    credit(described);
+    theme = null;
+    applyTheme(themeFor(scene.hour, scene.dark()));
+    heroTone = undefined;
+    applyHeroTone();
+    placeHeroText();
+    getComputedStyle(heroText).color; // all of it in place now, with no transitions
+  }
+
+  async function switchScene(id) {
+    const token = ++switchCount;
+    switching = token;
+    const live = () => switching === token;
+    // 1. ready off screen; the painting's card in the gallery pulses until then
+    await scene.prepare(id);
+    if (!live()) return;
+    for (const card of options.querySelectorAll('.preparing')) card.classList.remove('preparing');
+    // 2.
+    await hideCard();
+    if (!live()) return;
+    // 3.
+    const described = await scene.retarget(id);
+    if (!live()) return;
+    swapTheme(described);
+    // 4.
+    await scene.reveal(id);
+    if (!live()) return;
+    // 5.
+    placeHeroText(); // the sun may have moved on a little meanwhile
+    getComputedStyle(heroText).color;
+    await showCard();
+    if (!live()) return;
+    switching = 0;
+    root.classList.remove('scene-switching');
+  }
+
+  // Dev check (on localhost, or with ?dev): the card's colours may only
+  // change while it can't be seen. Any change to the theme on the page's
+  // root during a switch while the card shows at all is logged as an error.
+  const DEV = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || new URLSearchParams(location.search).has('dev');
+  if (DEV) {
+    const themeState = () => {
+      const st = root.style;
+      let out = root.dataset.theme || '';
+      for (let i = 0; i < st.length; i++) {
+        const name = st[i];
+        if (name.startsWith('--') && name !== '--switch-ms' && name !== '--scene-depth' && name !== '--content-start') out += `|${name}:${st.getPropertyValue(name)}`;
+      }
+      return out;
+    };
+    let seen = themeState();
+    new MutationObserver(() => {
+      const now = themeState();
+      if (now === seen) return;
+      seen = now;
+      const opacity = parseFloat(getComputedStyle(heroText).opacity);
+      if (switching && opacity !== 0) console.error(`[scene switch] the theme changed while the hero card showed (opacity ${opacity})`);
+    }).observe(root, { attributes: true, attributeFilter: ['style', 'data-theme'] });
+  }
+
+  // ---------- gallery: choose the painting ----------
+  // A button opens a small panel of the paintings, as a group of radio
+  // buttons (arrow keys move between them; the choice takes effect at once).
+  // Esc or a click elsewhere closes it. The choice is remembered, and a link
+  // with ?scene=… shows that scene first. On a first visit a tip points at
+  // the button until it's used or dismissed.
+
+  const SCENE_STORE = 'cw-scene', TIP_STORE = 'cw-gallery-tip';
+  const store = {
+    get(key) {
+      try {
+        return localStorage.getItem(key);
+      } catch {
+        return null;
+      }
+    },
+    set(key, value) {
+      try {
+        localStorage.setItem(key, value);
+      } catch {
+        /* private mode or blocked storage: it just isn't remembered */
+      }
+    },
+  };
+
+  const gallery = $('#gallery'), galleryToggle = $('#gallery-toggle'), galleryPanel = $('#gallery-panel');
+  const options = $('#gallery-options'), tip = $('#gallery-hint');
+
+  function buildGallery() {
+    for (const s of scene.scenes) {
+      const input = el('input', { type: 'radio', name: 'scene', value: s.id });
+      const img = el('img', { src: s.thumb, alt: '', width: 480, height: 270, loading: 'lazy', decoding: 'async' });
+      options.append(el('label', { className: 'gallery-card' }, [
+        input,
+        el('span', { className: 'gallery-frame' }, [img]),
+        el('span', { className: 'gallery-name' }, [el('b', { textContent: s.label }), ` · after ${s.after}`]),
+      ]));
+    }
+    syncGallery(root.dataset.scene);
+  }
+
+  function syncGallery(id) {
+    for (const input of options.querySelectorAll('input')) input.checked = input.value === id;
+    for (const card of options.querySelectorAll('.preparing')) card.classList.remove('preparing');
+  }
+
+  // the paintings get ready to switch to before they're picked
+  const prepareFirstOther = () => {
+    const other = scene.scenes.find((s) => s.id !== root.dataset.scene);
+    if (other) scene.prepare(other.id);
+  };
+  options.addEventListener('pointerover', (e) => {
+    const input = e.target.closest('.gallery-card')?.querySelector('input');
+    if (input && !input.checked) scene.prepare(input.value);
+  });
+  options.addEventListener('focusin', (e) => e.target.value && !e.target.checked && scene.prepare(e.target.value));
+
+  function openGallery() {
+    prepareFirstOther();
+    galleryPanel.hidden = false;
+    galleryToggle.setAttribute('aria-expanded', 'true');
+    hideTip();
+    (options.querySelector('input:checked') || options.querySelector('input')).focus();
+  }
+
+  let releaseTimer = 0;
+  function closeGallery(returnFocus) {
+    if (galleryPanel.hidden) return;
+    // a painting got ready and not picked is let go after a while
+    clearTimeout(releaseTimer);
+    releaseTimer = setTimeout(() => galleryPanel.hidden && !switching && scene.release(), 15000);
+    galleryPanel.hidden = true;
+    galleryToggle.setAttribute('aria-expanded', 'false');
+    if (returnFocus) galleryToggle.focus();
+  }
+
+  galleryToggle.addEventListener('click', () => (galleryPanel.hidden ? openGallery() : closeGallery(true)));
+  galleryPanel.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeGallery(true);
+    }
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (!gallery.contains(e.target)) closeGallery(false);
+  });
+  galleryPanel.addEventListener('focusout', (e) => {
+    if (e.relatedTarget && !gallery.contains(e.relatedTarget)) closeGallery(false);
+  });
+
+  options.addEventListener('change', (e) => {
+    const id = e.target.value;
+    // the card pulses until the repaint begins (the painting may still be getting ready)
+    for (const card of options.querySelectorAll('.gallery-card')) card.classList.toggle('preparing', card.contains(e.target));
+    switchScene(id);
+    store.set(SCENE_STORE, id);
+    // a shared link keeps naming the scene it shows
+    const url = new URL(location.href);
+    if (url.searchParams.has('scene')) {
+      url.searchParams.set('scene', id);
+      history.replaceState(null, '', url);
+    }
+  });
+
+  function hideTip() {
+    if (!tip.hidden) store.set(TIP_STORE, 'seen');
+    tip.hidden = true;
+  }
+  $('#gallery-hint-close').addEventListener('click', hideTip);
+  const offerTip = () => {
+    if (store.get(TIP_STORE) !== 'seen') setTimeout(() => galleryPanel.hidden && (tip.hidden = false), 1500);
+  };
 
   // ---------- nocturne: jump the painting to night, and back ----------
   // The choice is remembered. Without one, a visitor whose system prefers a
@@ -210,6 +517,7 @@
   const toDay = () => scene.setHour(isNightHour(realHour()) ? DAY_HOUR : null);
 
   nocturne.addEventListener('click', () => {
+    if (!scene) return;
     if (theme === 'night') {
       toDay();
       saveChoice('off');
@@ -233,14 +541,15 @@
     const open = !timeControl.classList.contains('open');
     timeControl.classList.toggle('open', open);
     timeToggle.setAttribute('aria-expanded', String(open));
-    placeHeroText();
+    if (!switching) placeHeroText();
   });
 
   // ---------- start ----------
 
   renderContent();
 
-  if (scene) {
+  function init() {
+    scene = window.paintedScene;
     const params = new URLSearchParams(location.search);
     const previewing = params.has('hour') || params.has('mode');
     const choice = readChoice();
@@ -251,9 +560,11 @@
     }
     applyTheme(themeFor(scene.hour, isNightHour(scene.hour) ? 1 : 0));
 
+    buildGallery();
     window.addEventListener('sceneready', () => {
+      offerTip();
       placeHeroText();
-      document.fonts.ready.then(placeHeroText); // the web fonts change the text's size
+      document.fonts.ready.then(() => !switching && placeHeroText()); // the web fonts change the text's size
       // retire the still once the live painting has finished fading in over it
       setTimeout(() => $('.hero-still').classList.add('retired'), 1000);
     });
@@ -261,7 +572,9 @@
     let resizeTimer = 0;
     window.addEventListener('resize', () => {
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(placeHeroText, 250);
+      resizeTimer = setTimeout(() => !switching && placeHeroText(), 250);
     });
   }
+  if (window.paintedScene) init();
+  else window.addEventListener('paintedscene', init, { once: true });
 })();
