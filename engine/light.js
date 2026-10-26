@@ -17,7 +17,16 @@ export function relight(g, paint, { tint, desat = 0, wash = null }) {
   g.setTransform(1, 0, 0, 1, 0, 0);
   g.globalCompositeOperation = 'copy';
   g.drawImage(paint, 0, 0, w, h);
-  if (tint && (tint[0] < 255 || tint[1] < 255 || tint[2] < 255)) {
+  const tinted = tint && (tint[0] < 255 || tint[1] < 255 || tint[2] < 255);
+  if (tinted || desat > 0.004 || (wash && wash[3] > 0.004)) {
+    // Blended over the clear canvas round it, the paint's soft edges would
+    // take on the light's own colour (a pale halo round anything dark): so
+    // first its colours are bled a couple of px out under it, and its edges
+    // blend as the colour they are
+    g.globalCompositeOperation = 'destination-over';
+    for (const [dx, dy] of BLEED) g.drawImage(paint, dx, dy, w, h);
+  }
+  if (tinted) {
     g.globalCompositeOperation = 'multiply';
     g.fillStyle = rgb(tint);
     g.fillRect(0, 0, w, h);
@@ -37,6 +46,8 @@ export function relight(g, paint, { tint, desat = 0, wash = null }) {
   g.drawImage(paint, 0, 0, w, h);
   g.globalCompositeOperation = 'source-over';
 }
+
+const BLEED = [[1, 0], [-1, 0], [0, 1], [0, -1], [2, 2], [-2, -2], [2, -2], [-2, 2]];
 
 // a short string that changes when the light visibly does, for static layer
 // keys: colours to the nearest unit, fractions to three places

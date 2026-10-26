@@ -62,14 +62,20 @@ export function makeGlow(r, g, b) {
 
 // Runs a builder in slices of about 12 ms, handing the main thread back
 // between slices so the page never stalls while a painting is prepared.
-// Builders are generators that yield between small pieces of work. Returns
-// false if `alive()` turns false part-way (a newer build took over).
+// Builders are generators that yield between small pieces of work; one may
+// yield a promise (work done elsewhere, in a worker), and the build waits for
+// it. Returns false if `alive()` turns false part-way (a newer build took over).
 export const nextTask = () => new Promise((resolve) => setTimeout(resolve, 0));
+export const isPromise = (v) => !!v && typeof v.then === 'function';
 export async function runSliced(steps, alive) {
   let t0 = performance.now();
   if (steps && steps[Symbol.iterator]) {
-    for (const _ of steps) {
-      if (performance.now() - t0 > 12) {
+    for (const v of steps) {
+      if (isPromise(v)) {
+        await v.then(null, () => {});
+        if (!alive()) return false;
+        t0 = performance.now();
+      } else if (performance.now() - t0 > 12) {
         await nextTask();
         if (!alive()) return false;
         t0 = performance.now();

@@ -10,6 +10,7 @@
 export const SCENES = [
   { id: 'wheat', label: 'Wheat Field', after: 'Van Gogh', load: () => import('./wheat.js') },
   { id: 'tulips', label: 'Tulip Fields', after: 'Monet', load: () => import('./tulips.js') },
+  { id: 'harbor', label: 'Harbor', after: 'Monet', load: () => import('./harbor.js') },
 ];
 
 export const DEFAULT_SCENE = SCENES[0].id;
