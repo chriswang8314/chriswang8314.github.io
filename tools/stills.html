@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Scene stills</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f6f4f0; --fg: #222; --muted: #666; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #18181c; --fg: #eee; --muted: #aaa; } }
+    body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+    main { max-width: 960px; margin: 0 auto; }
+    p { color: var(--muted); }
+    button { font: inherit; padding: 8px 16px; border-radius: 8px; border: 1px solid currentColor; background: none; color: inherit; cursor: pointer; }
+    ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; padding: 0; list-style: none; }
+    li img { width: 100%; height: auto; border-radius: 6px; background: repeating-conic-gradient(#8883 0 25%, #0000 0 50%) 0 0 / 16px 16px; }
+    a { color: inherit; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Scene stills</h1>
+    <p>Paints every scene in <code>scenes/index.js</code> once at its day and night
+      placeholder hours (from the scene's <code>placeholder</code>), at 1600&nbsp;×&nbsp;1215
+      (one 1600&nbsp;×&nbsp;900 screen plus its dissolve) and at 960 wide, plus a gallery
+      thumbnail. Save each file into <code>scenes/stills/</code> under the name shown.
+      Serve the site locally and open this page from it (<code>/tools/stills.html</code>).</p>
+    <button type="button" id="go">Make stills</button>
+    <ul id="out"></ul>
+  </main>
+  <script type="module">
+    import { SCENES } from '../scenes/index.js';
+    import { prerender } from '../engine/prerender.js';
+
+    const W = 1600, H = 900, CH = Math.round(H * 1.35), QUALITY = 0.8;
+    const blob = (c, q = QUALITY) => new Promise((r) => c.toBlob(r, 'image/webp', q));
+    const scaled = (src, w, h, sx = 0, sy = 0, sw = src.width, sh = src.height) => {
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const g = c.getContext('2d');
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(src, sx, sy, sw, sh, 0, 0, w, h);
+      return c;
+    };
+
+    // every still as { name: Blob }, for this page and for scripts that drive it
+    window.makeStills = async (only) => {
+      const files = {};
+      for (const entry of SCENES) {
+        if (only && !only.includes(entry.id)) continue;
+        const def = (await entry.load()).default;
+        for (const variant of ['day', 'night']) {
+          const c = await prerender(def, { W, H, CH, dpr: 1, hour: def.placeholder[variant] });
+          files[`${entry.id}-${variant}.webp`] = await blob(c);
+          files[`${entry.id}-${variant}-960.webp`] = await blob(scaled(c, 960, Math.round((CH * 960) / W)));
+          // the gallery card: the first screen, at 16:9
+          if (variant === 'day') files[`${entry.id}-thumb.webp`] = await blob(scaled(c, 480, 270, 0, 0, W, H), 0.78);
+        }
+      }
+      return files;
+    };
+
+    document.getElementById('go').addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      e.target.textContent = 'Painting…';
+      const out = document.getElementById('out');
+      out.textContent = '';
+      for (const [name, b] of Object.entries(await window.makeStills())) {
+        const url = URL.createObjectURL(b);
+        const li = document.createElement('li');
+        li.innerHTML = `<img alt=""><br><a download></a> · ${Math.round(b.size / 1024)} KB`;
+        li.querySelector('img').src = url;
+        Object.assign(li.querySelector('a'), { href: url, download: name, textContent: name });
+        out.append(li);
+      }
+      e.target.textContent = 'Done';
+    });
+  </script>
+</body>
+</html>

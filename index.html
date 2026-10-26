@@ -30,8 +30,36 @@
   <!-- fonts load without holding up the first paint -->
   <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600&display=swap" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600&display=swap"></noscript>
-  <link rel="preload" as="image" href="hero.webp" imagesrcset="hero-960.webp 960w, hero.webp 1600w" imagesizes="100vw" fetchpriority="high">
   <link rel="stylesheet" href="style.css">
+  <!-- Which painting to show first: the link's ?scene=, else this visitor's
+       last pick, else the wheat field; and whether to start from its day or
+       night still. Its still and its module start downloading straight away. -->
+  <script>
+    (function () {
+      var q = new URLSearchParams(location.search), ok = /^[a-z0-9-]+$/, id = q.get('scene'), saved = null, nocturne = null;
+      try { saved = localStorage.getItem('cw-scene'); nocturne = localStorage.getItem('cw-nocturne'); } catch (e) {}
+      if (!ok.test(id || '')) id = ok.test(saved || '') ? saved : 'wheat';
+      var h = parseFloat(q.get('hour')), now = new Date().getHours(), night;
+      if (!isNaN(h)) night = h >= 20.5 || h < 5.6;
+      else if (q.get('mode')) night = q.get('mode') === 'night';
+      else if (nocturne) night = nocturne === 'on';
+      else night = matchMedia('(prefers-color-scheme: dark)').matches || now >= 21 || now < 6;
+      var base = 'scenes/stills/' + id + '-' + (night ? 'night' : 'day');
+      window.firstStill = { src: base + '.webp', srcset: base + '-960.webp 960w, ' + base + '.webp 1600w' };
+      document.documentElement.dataset.scene = id;
+      var still = document.createElement('link');
+      still.rel = 'preload';
+      still.as = 'image';
+      still.href = firstStill.src;
+      still.setAttribute('imagesrcset', firstStill.srcset);
+      still.setAttribute('imagesizes', '100vw');
+      still.setAttribute('fetchpriority', 'high');
+      var mod = document.createElement('link');
+      mod.rel = 'modulepreload';
+      mod.href = 'scenes/' + id + '.js';
+      document.head.append(still, mod);
+    })();
+  </script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -47,9 +75,13 @@
   </nav>
 
   <header class="hero" id="top">
-    <img class="hero-still" src="hero.webp" srcset="hero-960.webp 960w, hero.webp 1600w" sizes="100vw" alt="" width="1600" height="1215" fetchpriority="high">
+    <img class="hero-still" alt="" width="1600" height="1215" fetchpriority="high" sizes="100vw">
+    <script>
+      (function (img) { img.srcset = firstStill.srcset; img.src = firstStill.src; })(document.querySelector('.hero-still'));
+    </script>
+    <noscript><img class="hero-still" src="scenes/stills/wheat-day.webp" srcset="scenes/stills/wheat-day-960.webp 960w, scenes/stills/wheat-day.webp 1600w" sizes="100vw" alt="" width="1600" height="1215"></noscript>
     <canvas id="scene" aria-hidden="true"></canvas>
-    <p class="visually-hidden" data-content="sceneDescription"></p>
+    <p class="visually-hidden" id="scene-description"></p>
 
     <div class="hero-text" id="hero-text">
       <p class="hello">Hi, I'm</p>
@@ -58,6 +90,25 @@
       <ul class="hero-links" id="hero-links"></ul>
     </div>
 
+    <div class="hero-controls">
+    <div class="gallery" id="gallery">
+      <p class="gallery-hint" id="gallery-hint" hidden>
+        <span>Try another painting →</span>
+        <button type="button" class="gallery-hint-close" id="gallery-hint-close" aria-label="Dismiss the tip">×</button>
+      </p>
+      <button type="button" class="gallery-toggle" id="gallery-toggle" aria-expanded="false" aria-controls="gallery-panel">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3a9 9 0 0 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H16a5 5 0 0 0 5-5c0-4-4-7.2-9-7.2z" />
+          <circle cx="7.5" cy="11" r="1.3" /><circle cx="10.5" cy="7" r="1.3" /><circle cx="15" cy="7.4" r="1.3" />
+        </svg>
+        <span class="gallery-label">Gallery</span>
+      </button>
+      <div class="gallery-panel" id="gallery-panel" role="dialog" aria-labelledby="gallery-title" hidden>
+        <fieldset class="gallery-options" id="gallery-options" role="radiogroup" aria-labelledby="gallery-title">
+          <legend class="gallery-title" id="gallery-title">Choose a painting</legend>
+        </fieldset>
+      </div>
+    </div>
     <div class="time-control" id="time-control" role="group" aria-label="Time of day">
       <button type="button" class="time-toggle" id="time-toggle" aria-expanded="false" aria-controls="time-panel" aria-label="Change the time of day">
         <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true">
@@ -73,6 +124,7 @@
         <span id="time-label" class="time-label"></span>
         <button id="time-now" class="time-now" type="button" title="Back to the real time" hidden>now</button>
       </div>
+    </div>
     </div>
 
     <p id="hint" class="hint" aria-hidden="true"></p>
@@ -109,10 +161,11 @@
   <footer class="site-footer">
     <p id="footer-made"></p>
     <p id="footer-updated" class="muted"></p>
+    <p id="footer-scene" class="muted"></p>
   </footer>
 
   <script src="content.js"></script>
-  <script src="scene.js"></script>
   <script src="site.js"></script>
+  <script type="module" src="engine/engine.js"></script>
 </body>
 </html>

@@ -30,28 +30,10 @@
   color-scheme: light;
 }
 
-:root[data-theme='evening'] {
-  --bg: #f7ecd6;
-  --card: #fcf5e8;
-  --accent: #9a3a22;
-  --underline: #d65f35;
-  --chip-bg: rgba(200, 68, 42, 0.09);
-  --chip-text: #93361f;
-  --nav-bg: rgba(247, 236, 214, 0.8);
-}
-
+/* The colours above are the default scene's day colours, for the moment
+   before it loads. After that every theme's colours come from the scene
+   showing (its contentTheme, set inline by site.js). */
 :root[data-theme='night'] {
-  --bg: #141b33;
-  --card: #1b2442;
-  --text: #f3ebd6;
-  --muted: #b1adc4;
-  --border: rgba(242, 194, 48, 0.18);
-  --accent: var(--chrome);
-  --underline: var(--chrome);
-  --chip-bg: rgba(242, 194, 48, 0.12);
-  --chip-text: #f2d06b;
-  --weave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='3' height='3'%3E%3Cpath d='M0 .5h3M.5 0v3' stroke='%23fff' stroke-opacity='.035'/%3E%3C/svg%3E");
-  --nav-bg: rgba(20, 27, 51, 0.8);
   color-scheme: dark;
 }
 
@@ -91,7 +73,7 @@ body {
 }
 
 a {
-  color: var(--accent);
+  color: var(--link, var(--accent));
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
 }
@@ -229,8 +211,8 @@ h3 {
 
 /* ---------- hero: the painting, full screen ---------- */
 
-/* The painting is one canvas that runs on 35svh past the hero, where the
-   field dissolves into the page; the page background shows through the bare
+/* The painting is one canvas that runs on past the hero (35svh for the
+   wheat), where the field dissolves into the page; the page background shows through the bare
    canvas, so there's no edge between them. Everything scrolls together in
    normal flow. */
 .hero {
@@ -240,13 +222,15 @@ h3 {
 }
 
 .hero-still,
-#scene {
+#scene,
+.scene-stage {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 135vh;
-  height: 135svh;
+  /* the hero plus the scene's dissolve (--scene-depth, in svh, set by the engine) */
+  height: calc(var(--scene-depth, 135) * 1svh);
 }
 
 .hero-still {
@@ -273,8 +257,22 @@ h3 {
   opacity: 1;
 }
 
-/* name and links over the sky, on a translucent blue panel so the cream text
-   always has strong contrast; site.js keeps it clear of the sun and town */
+/* the other paintings' canvases (one comes in over another while switching;
+   see engine/engine.js), and any not in use */
+.scene-stage {
+  display: block;
+  touch-action: pan-y;
+}
+
+#scene.offstage,
+.scene-stage.offstage {
+  visibility: hidden;
+}
+
+/* name and links over the sky, on a panel so the text always has strong
+   contrast; site.js places it. By default (the wheat) a translucent blue
+   panel with cream text; a scene can swap in its own (the tulips: dark ink
+   on a soft light glow while the sky is pale), via the --hero-* variables. */
 .hero-text {
   position: absolute;
   z-index: 2;
@@ -283,16 +281,27 @@ h3 {
   width: max-content;
   max-width: calc(100% - 32px);
   padding: 16px 24px 18px;
+  color: var(--hero-fg, var(--cream-text));
+  text-shadow: var(--hero-shadow, 0 1px 8px rgba(10, 18, 48, 0.55));
+  transition: color 0.6s ease, opacity 0.3s ease;
+}
+
+/* the panel, behind the text; blurred into a soft glow when a scene asks */
+.hero-text::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
   border-radius: 18px;
-  background: rgba(16, 26, 66, 0.68);
-  color: var(--cream-text);
-  text-shadow: 0 1px 8px rgba(10, 18, 48, 0.55);
+  background: var(--hero-panel, rgba(16, 26, 66, 0.68));
+  filter: var(--hero-panel-filter, none);
+  transition: background-color 0.6s ease;
 }
 
 /* once placed, it glides to new spots as the sun moves */
 @media (prefers-reduced-motion: no-preference) {
   .hero-text.placed {
-    transition: top 0.8s ease, left 0.8s ease;
+    transition: top 0.8s ease, left 0.8s ease, color 0.6s ease, opacity 0.3s ease;
   }
 }
 
@@ -340,14 +349,14 @@ h3 {
   place-items: center;
   width: 40px;
   height: 40px;
-  border: 1px solid rgba(255, 248, 231, 0.45);
+  border: 1px solid var(--hero-ring, rgba(255, 248, 231, 0.45));
   border-radius: 50%;
-  color: var(--cream-text);
+  color: var(--hero-fg, var(--cream-text));
   transition: background 0.2s;
 }
 
 .icon-link:hover {
-  background: rgba(255, 248, 231, 0.16);
+  background: var(--hero-ring-hover, rgba(255, 248, 231, 0.16));
 }
 
 .icon-link svg {
@@ -361,8 +370,8 @@ h3 {
   height: 40px;
   padding: 0 18px;
   border-radius: 999px;
-  background: var(--ui-cream);
-  color: #2b2a3a;
+  background: var(--resume-bg, var(--ui-cream));
+  color: var(--resume-fg, #2b2a3a);
   font-weight: 600;
   text-decoration: none;
   text-shadow: none;
@@ -374,16 +383,229 @@ h3 {
 }
 
 .hero :focus-visible {
-  outline-color: var(--cream-text);
+  outline-color: var(--hero-fg, var(--cream-text));
+}
+
+/* ---------- the controls over the sky: gallery and time of day ---------- */
+
+.hero-controls {
+  position: absolute;
+  z-index: 3;
+  top: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ---------- gallery: choose the painting ---------- */
+
+.gallery-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 46px;
+  padding: 0 16px 0 13px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  background: rgba(16, 26, 66, 0.55);
+  color: var(--cream-text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.gallery-toggle:hover,
+.gallery-toggle[aria-expanded='true'] {
+  background: rgba(16, 26, 66, 0.75);
+}
+
+.gallery-toggle svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+}
+
+.gallery-toggle:focus-visible {
+  outline: 2px solid var(--cream-text);
+  outline-offset: 3px;
+}
+
+/* the popover hangs under the controls, right-aligned with them */
+.gallery-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(400px, calc(100vw - 28px));
+  padding: 14px 14px 16px;
+  border-radius: 16px;
+  background: rgba(250, 248, 244, 0.97);
+  color: #2b2a3a;
+  box-shadow: 0 18px 44px -14px rgba(10, 14, 40, 0.5);
+}
+
+.gallery-panel[hidden] {
+  display: none;
+}
+
+.gallery-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.gallery-title {
+  margin-bottom: 10px;
+  padding: 0;
+  font-family: var(--serif);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.gallery-card {
+  position: relative;
+  display: block;
+  cursor: pointer;
+}
+
+/* the real radio button covers the card, invisibly: it's what's clicked,
+   focused and announced */
+.gallery-card input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.gallery-frame {
+  display: block;
+  padding: 3px;
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px rgba(43, 42, 58, 0.16);
+  transition: box-shadow 0.2s;
+}
+
+.gallery-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border-radius: 9px;
+  object-fit: cover;
+}
+
+.gallery-card:hover .gallery-frame {
+  box-shadow: 0 0 0 2px rgba(43, 42, 58, 0.35);
+}
+
+/* the scene showing wears a ring */
+.gallery-card input:checked + .gallery-frame {
+  box-shadow: 0 0 0 3px #2d4f9e;
+}
+
+/* picked, while the painting gets ready: the ring breathes */
+@media (prefers-reduced-motion: no-preference) {
+  .gallery-card.preparing .gallery-frame {
+    animation: preparing 1s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes preparing {
+  to {
+    box-shadow: 0 0 0 3px rgba(45, 79, 158, 0.35);
+  }
+}
+
+.gallery-card input:focus-visible + .gallery-frame {
+  outline: 2px solid #2b2a3a;
+  outline-offset: 4px;
+}
+
+.gallery-name {
+  display: block;
+  margin-top: 7px;
+  font-size: 13.5px;
+  line-height: 1.35;
+}
+
+.gallery-name b {
+  font-weight: 600;
+}
+
+/* first visit only: a tip pointing at the button */
+.gallery-hint {
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 10px);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 5px 5px 14px;
+  border-radius: 999px;
+  background: rgba(250, 248, 244, 0.95);
+  box-shadow: 0 8px 22px -10px rgba(10, 14, 40, 0.5);
+  color: #2b2a3a;
+  font-size: 13.5px;
+  white-space: nowrap;
+  transform: translateY(-50%);
+}
+
+.gallery-hint[hidden] {
+  display: none;
+}
+
+.gallery-hint-close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.gallery-hint-close:hover {
+  background: rgba(43, 42, 58, 0.08);
+}
+
+.gallery-hint-close:focus-visible {
+  outline: 2px solid #2b2a3a;
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .gallery-hint:not([hidden]) {
+    animation: tip-in 0.5s ease both;
+  }
+}
+
+@keyframes tip-in {
+  from {
+    opacity: 0;
+    transform: translate(8px, -50%);
+  }
 }
 
 /* ---------- time of day control ---------- */
 
 .time-control {
-  position: absolute;
-  z-index: 3;
-  top: 20px;
-  right: 20px;
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -464,10 +686,40 @@ body:not(.night) .icon-moon {
 
 /* on small screens the control folds down to an icon that opens on tap */
 @media (max-width: 640px) {
-  .time-control {
+  .hero-controls {
     top: 14px;
     right: 14px;
+    gap: 8px;
+  }
+
+  .time-control {
     padding: 4px;
+  }
+
+  /* just the icon on a phone */
+  .gallery-toggle {
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    padding: 0;
+  }
+
+  .gallery-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  /* the open time slider takes the whole row */
+  .hero-controls:has(.time-control.open) {
+    left: 14px;
+  }
+
+  .hero-controls:has(.time-control.open) .gallery {
+    display: none;
   }
 
   .time-toggle {
@@ -480,7 +732,7 @@ body:not(.night) .icon-moon {
   }
 
   .time-control.open {
-    left: 14px;
+    flex: 1;
     padding-right: 12px;
   }
 
@@ -587,7 +839,7 @@ main {
   position: relative;
   z-index: 1;
   padding-top: 26vh;
-  padding-top: 26svh;
+  padding-top: calc(var(--content-start, 26) * 1svh);
 }
 
 .section {
@@ -746,4 +998,46 @@ main {
 
 .site-footer p + p {
   margin-top: 4px;
+}
+
+/* ---------- switching paintings ----------
+   The next painting is brushed in over the current one, both still moving
+   (engine/engine.js). Meanwhile only colours change on the page: the content
+   below takes the new painting's colours over the repaint's length (site.js
+   sets --switch-ms). The hero card steps out first, in its old colours, is
+   hidden outright while its colours and place change (with nothing allowed
+   to animate), and comes back once the new painting is up. Nothing that
+   needs layout is animated. */
+
+html.scene-switching body,
+html.scene-switching main *,
+html.scene-switching .site-footer,
+html.scene-switching .site-footer * {
+  transition: color var(--switch-ms, 1300ms) ease-in-out, background-color var(--switch-ms, 1300ms) ease-in-out,
+    border-color var(--switch-ms, 1300ms) ease-in-out !important;
+}
+
+.hero-text.card-out {
+  opacity: 0;
+  transition: opacity 0.2s ease !important;
+}
+
+.hero-text.card-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.hero-text.card-hidden,
+.hero-text.card-hidden::before,
+.hero-text.card-hidden * {
+  transition: none !important;
+}
+
+.hero-text.card-in {
+  transition: opacity 0.3s ease !important;
+}
+
+html.scene-switching .site-nav {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }

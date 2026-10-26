@@ -1,6 +1,8 @@
 /*
  * Every word on the site lives here. Edit this file to update the page;
- * site.js renders it into the layout. Keep entries short and plain.
+ * site.js renders it into the layout. Keep entries short and plain. (Each
+ * painting's own words, its title and screen-reader description, live with
+ * it in scenes/.)
  *
  * Text fields are plain text. Links are { label, url }.
  */
@@ -98,8 +100,4 @@ window.CONTENT = {
   ],
 
   contact: 'Email is the best way to reach me.',
-
-  // read by screen readers in place of the painting
-  sceneDescription:
-    'A painting in the style of Van Gogh’s Wheat Field with Setting Sun: a field of yellow and orange brushstrokes under a swirling sky, with the town of Arles on the horizon. The light follows the time of day.',
 };
