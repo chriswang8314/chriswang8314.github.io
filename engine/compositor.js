@@ -15,7 +15,7 @@
  * own offscreen canvases as they need. Layers are drawn in z order;
  * build/update/frame run in the order the scene lists them.
  */
-import { runSliced, nextTask, offscreen, release } from './util.js';
+import { runSliced, offscreen, release } from './util.js';
 
 export function createCompositor() {
   let layers = [], drawOrder = [];
@@ -40,17 +40,26 @@ export function createCompositor() {
       return layers;
     },
 
-    // Builds every layer, sliced; false if `alive()` turned false part-way.
-    // run(steps, alive) does the slicing (by default runSliced).
-    async build(state, alive, run = runSliced) {
+    // Builds every layer, sliced (runSliced); false if `alive()` turned
+    // false part-way.
+    async build(state, alive) {
+      return (await runSliced(comp.buildSteps(state), alive)) && alive();
+    },
+
+    // the same as steps (a generator), every layer's one after another, for
+    // the engine to slice along with other work; `working` is the layer
+    // they're at
+    working: null,
+    *buildSteps(state) {
       for (const cache of caches.values()) cache.key = null; // sizes change: re-render statics
       for (const layer of layers) {
         if (!layer.build) continue;
-        if (!(await run(layer.build(state), alive, layer.id))) return false;
-        await nextTask();
-        if (!alive()) return false;
+        comp.working = layer.id;
+        const steps = layer.build(state);
+        if (steps && steps[Symbol.iterator]) yield* steps;
+        yield;
       }
-      return true;
+      comp.working = null;
     },
 
     update(dt, state) {
@@ -80,10 +89,12 @@ export function createCompositor() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, state.W, state.CH);
       for (const layer of drawOrder) {
+        comp.working = layer.id;
         if (layer.kind === 'static') drawStatic(ctx, layer, state);
         else layer.render?.(ctx, state);
         yield;
       }
+      comp.working = null;
     },
 
     // with `profile` on: each layer's render time since last asked, as [avg, max] ms

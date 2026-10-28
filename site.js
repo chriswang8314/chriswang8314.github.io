@@ -267,10 +267,11 @@
   // ---------- switching paintings ----------
   // One routine runs every switch, in strict order, and while it runs it's
   // the only thing that touches the hero card or the theme:
-  //   1. prepare: the engine gets the new painting ready off screen (nothing visible changes)
+  //   1. prepare: the engine gets the new painting ready off screen, while
   //   2. hide the card: it fades out in its own colours, then is hidden outright
-  //   3. swap the theme: with the card hidden and nothing on it animating, the
-  //      new painting's colours go on and the card moves to its new place
+  //   3. swap the theme: once both are done, with the card hidden and nothing
+  //      on it animating, the new painting's colours go on and the card moves
+  //      to its new place
   //   4. repaint: the new painting is brushed in, both moving throughout
   //   5. show the card: it fades in, already in the new colours
   // Each switch has a token. Picking another painting part-way overtakes it
@@ -333,13 +334,11 @@
     const token = ++switchCount;
     switching = token;
     const live = () => switching === token;
-    // 1. ready off screen; the painting's card in the gallery pulses until then
-    await scene.prepare(id);
+    // 1. and 2.: ready off screen (picked, so in a hurry) as the card steps
+    // out; the painting's card in the gallery pulses until then
+    await Promise.all([scene.prepare(id, true), hideCard()]);
     if (!live()) return;
     for (const card of options.querySelectorAll('.preparing')) card.classList.remove('preparing');
-    // 2.
-    await hideCard();
-    if (!live()) return;
     // 3.
     const described = await scene.retarget(id);
     if (!live()) return;
@@ -438,6 +437,7 @@
   options.addEventListener('focusin', (e) => e.target.value && !e.target.checked && scene.prepare(e.target.value));
 
   function openGallery() {
+    scene.preload();
     prepareFirstOther();
     galleryPanel.hidden = false;
     galleryToggle.setAttribute('aria-expanded', 'true');

@@ -23,7 +23,10 @@ Then open <http://localhost:5173>. Add `?hour=18.75` (or any hour 0–24) to
 preview a time of day, and `?scene=tulips` to open a painting (that's also
 how to share a link to one). A visitor's own pick from the gallery is
 remembered in their browser. `?profile` adds each layer's draw time to
-`paintedScene.stats()` in the console, and `?slowmo=20` plays the switch
+`paintedScene.stats()` in the console, and how long getting each painting
+ready took, part by part (`prepare`: ms in when its module, build,
+warm-up, first draw and repaint map were done; `background`: ms of work by
+layer), and `?slowmo=20` plays the switch
 between paintings twenty times slower, to look at it closely. `?quality=0.5`
 starts the painting as if its frames had been running long, to see a
 scene's lighter modes. On
@@ -137,11 +140,13 @@ write to `wind`, `pointer` or anything else it's handed. It returns:
 
 Paint everything that doesn't move once, in `build`, and keep per-frame
 work for what moves. Anything that moves belongs only to an animated layer,
-never painted into a static texture as well. `build` runs in the spare time
-at the end of each frame while another scene is on screen, so yield often:
-every few milliseconds of work at most. A step may yield a promise (work
-done in a worker, say) and the build waits for it without spending the
-frames' time. A static
+never painted into a static texture as well. `build` runs between frames,
+in the time left before the next one is due, while another scene is on
+screen, so yield often: every few milliseconds of work at most. A step may
+yield a promise (work done in a worker, say) and the build waits for it
+without spending the frames' time; start such work as early as the build
+can (the harbour starts baking its reflections before it paints the water,
+which they don't need) and yield it where its result is needed. A static
 layer is cached by the compositor and redrawn only when its `key` changes; an
 animated one draws every frame and can keep its own buffers (a `keyedCache`
 from `engine/compositor.js` re-renders one only when the light changes).
@@ -159,21 +164,26 @@ from `engine/compositor.js` re-renders one only when the light changes).
 | `engine/pointer.js` | `state.pointer`: `x`, `y`, `active`, and smoothed `vx`, `vy` per step |
 | `engine/water.js` | Water: `swellAt(X, Z, t, chop, unit)` (the swell's height and slopes on the water's plane; `planeAt` maps a screen point onto it), `SWELL_GLSL` (the same, for a shader), `paintReflection` (Monet's painted reflection of what's above, flipped), `createWaterGL()` (one pass moving a reflection buffer by the swell; `drawStrips` without WebGL). The harbour shows how they fit together |
 | `engine/bake.js` | `bake(import.meta.url, 'name', args)`: runs a generator the scene exports in a worker (slow one-off painting) and hands back its canvases as ImageBitmaps; `bitmaps()` to send it images |
-| `engine/governor.js` | `state.quality` (1, dropping to 0.3 if frames run long): scale optional work by it. `state.motion` is false under reduced motion: paint the scene still |
+| `engine/governor.js` | `state.quality` (1, dropping toward 0.3 while frames run long, and climbing back once they don't): scale optional work by it, reading it as you go. `state.motion` is false under reduced motion: paint the scene still |
 
 The engine also handles the time slider, pausing off screen, the DPR cap,
-resizing, and switching scenes. A switch is prepared before anything on
-screen changes: the next scene is built off screen, in the frames' spare
-time, and run a few seconds ahead so it arrives already moving, and a worker
-paints the reveal-time map of the brushstrokes that will paint it in
+resizing, and switching scenes. A switch is prepared before the painting on
+screen changes: the next scene is built off screen, between frames, and run
+a few seconds ahead so it arrives already moving, and a worker paints the
+reveal-time map of the brushstrokes that will paint it in
 (`engine/reveal.js`). The gallery starts this as it opens, or when a card is
-hovered or focused. During the repaint both scenes keep running, each on its
+hovered or focused. Each frame leaves that work whatever time is left before
+the next frame is due (more where the browser holds the page to 30 fps to
+save power), and always a few ms, so a slow machine still gets there; once a
+painting has been picked and the visitor is waiting for it, the work gets at
+least as long as drawing takes, and nothing merely hovered takes its place.
+During the repaint both scenes keep running, each on its
 own canvas (`engine/stage.js`), and each frame a mask from the map (one
 WebGL draw; Canvas 2D without WebGL) shows the new one where the brush has
 been and lets the old one go just behind it. At the end the old scene is
 simply dropped. Under reduced motion it's a 300 ms crossfade. `site.js`
-runs each switch in a fixed order (prepare, hide the hero card, swap the
-page's colours, repaint, show the card), and nothing else touches the card
+runs each switch in a fixed order (prepare while the hero card fades out,
+swap the page's colours, repaint, show the card), and nothing else touches the card
 or the colours meanwhile. A scene needs no DOM code; keep it that way.
 
 ### Brush and palettes
