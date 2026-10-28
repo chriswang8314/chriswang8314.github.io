@@ -1215,6 +1215,10 @@ function create(engine) {
   // reflections, moving with the swell; over those a scatter of still pale
   // ripples, and highlights that catch the light as the swell passes.
   function* buildWater() {
+    // the still reflections and the water's shader don't need the water: the
+    // worker and the browser start on them now, while it's painted here
+    const still = bakeStill();
+    if (waterGL === undefined) waterGL = createWaterGL();
     waterTop = Math.floor(horizonY - 1);
     const [c, g] = offscreen(W * dpr, (CH - waterTop) * dpr);
     g.scale(dpr, dpr);
@@ -1270,7 +1274,7 @@ function create(engine) {
     waterCache.reset();
 
     yield* buildRipples(rng);
-    yield* bakeStill();
+    yield* still;
     buildGlints(rng);
 
     // the reflection buffer the boats' reflections are gathered into each
@@ -1278,14 +1282,11 @@ function create(engine) {
     reflH = Math.min(CH - horizonY, horizonY);
     buf.width = Math.max(1, Math.round(W * dpr * REFL_RES));
     buf.height = Math.max(1, Math.round(reflH * dpr * REFL_RES));
-    if (waterGL === undefined) {
-      waterGL = createWaterGL();
-      // its shader compiles in the background where the browser can: wait for it, a frame at a time
-      while (waterGL && waterGL.poll() === 'compiling') yield new Promise((resolve) => setTimeout(resolve, 16));
-      if (waterGL && waterGL.poll() === 'failed') {
-        waterGL.dispose();
-        waterGL = null;
-      }
+    // its shader compiles in the background where the browser can: wait for it, a frame at a time
+    while (waterGL && waterGL.poll() === 'compiling') yield new Promise((resolve) => setTimeout(resolve, 16));
+    if (waterGL && waterGL.poll() === 'failed') {
+      waterGL.dispose();
+      waterGL = null;
     }
     for (const c of [boatBuf, litBuf]) {
       c.width = buf.width;
@@ -1324,12 +1325,17 @@ function create(engine) {
   }
 
   // the still reflections, baked away from the page where it can be
-  // (bakeReflections, above), on the page otherwise
-  function* bakeStill() {
+  // (bakeReflections, above), on the page otherwise: the bake starts when
+  // this is called, and its steps wait for it and keep what it made
+  function bakeStill() {
     const args = { W, H, CH, dpr, horizonY, harborTop, k }, box = {};
-    yield bitmaps(skyPaint, harborPaint, goldPaint)
+    const job = bitmaps(skyPaint, harborPaint, goldPaint)
       .then(([sky, harbor, gold]) => bake(import.meta.url, 'bakeReflections', { ...args, sky, harbor, gold }, [sky, harbor, gold]))
       .then((out) => (box.out = out), () => {});
+    return keepStill(job, box, args);
+  }
+  function* keepStill(job, box, args) {
+    yield job;
     const out = box.out || (yield* bakeReflections({ ...args, sky: skyPaint, harbor: harborPaint, gold: goldPaint }));
     [stillRefl, goldRefl].forEach(free);
     stillRefl = out.still;

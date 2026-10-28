@@ -70,8 +70,9 @@ export function createStage(def, canvas, { wind, pointer, time, governor, profil
         canvas.height = h;
       }
     },
-    // builds every layer; run(steps, alive) decides how the work is sliced
-    build: (alive, run) => compositor.build(state, alive, run),
+    // builds every layer, sliced; or the same as steps (a generator), for the engine to slice
+    build: (alive) => compositor.build(state, alive),
+    buildSteps: () => compositor.buildSteps(state),
 
     // one engine step: advances this scene's clock by `scale` of it
     step() {

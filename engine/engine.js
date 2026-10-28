@@ -20,7 +20,6 @@ import { offscreen, release, isPromise } from './util.js';
 import { SCENES, DEFAULT_SCENE, thumb } from '../scenes/index.js';
 
 const params = new URLSearchParams(location.search);
-const FRAME_BUDGET = 10; // ms of work a frame may take, background work included
 const FADE = 0.3; // under reduced motion a switch is a crossfade this long (s)
 const MASK_DPR = Number(params.get('maskdpr')) || 1; // the masks' resolution (px per CSS px); stretched smoothly over the painting
 const SEEDS = [11, 23]; // the repaint's stroke plans: a repaint that overtakes another uses the other one
@@ -59,7 +58,7 @@ let adopted = null; // the stage the page follows (its hint, its taps, its palet
 let target = null; // during a switch: the scene being switched to (its definition)
 let reveal = null; // the repaint in progress
 let ready = false, shown = false, builtW = 0, builtH = 0, buildId = 0;
-let running = false, rafId = 0, last = 0, acc = 0, simTime = 0;
+let running = false, rafId = 0, last = 0, acc = 0, simTime = 0, lastFrame = 0;
 let loops = 0; // frame loops alive: always 0 or 1 (stats() reports it, for checking)
 // with ?profile: each frame's [time, ms drawing, ms of background work, repainting]
 const frameLog = params.has('profile') ? (window.__frameLog = []) : null;
@@ -164,80 +163,128 @@ function retire(stage) {
 }
 
 // ---------- work in the background ----------
-// Getting the next painting ready runs in small pieces at the end of each
-// frame, in what's left of the frame's budget, so the painting on screen
-// never misses a frame for it. With the loop stopped, in 8 ms slices.
+// Getting the next painting ready runs in small pieces between frames: once a
+// frame is drawn and handed to the browser, in the time left before the next
+// one is due. How long that is comes from the frames themselves (about 16 ms
+// at 60 Hz; 33 ms where the browser holds the page to 30 fps to save power).
+// However long drawing takes, each frame leaves at least SLICE for it, so on
+// a slow machine it still gets done; and once a painting has been picked and
+// the visitor is waiting for it, at least as long as drawing took (the
+// painting on screen may drop to half its frame rate, for that moment, rather
+// than keep them waiting). With the loop stopped, in 8 ms slices.
 
+const SLICE = 3; // ms each frame leaves for background work, at the least
+const HURRY = 25; // ms: in a hurry it gets as long as drawing took, up to this (so one slow frame isn't doubled)
+const MARGIN = 3; // ms left free before the next frame is due
 const chores = [];
 let choreTimer = 0;
+let hurry = null; // the painting picked and waited for, while it's got ready
+let due = 0, drawMs = 0; // when the next frame is expected; how long the last one took to draw
+// with ?profile: ms spent on each kind of background step, and on getting each painting ready
+const choreLog = frameLog ? {} : null, prepLog = frameLog ? {} : null;
 
 // runs a generator's steps that way; resolves true when it's done, false if
 // `alive()` turned false first
 function background(steps, alive, label = '') {
   return new Promise((resolve) => {
-    chores.push({ it: steps && steps[Symbol.iterator] ? steps[Symbol.iterator]() : null, alive, resolve, label });
+    chores.push({ it: steps && steps[Symbol.iterator] ? steps[Symbol.iterator]() : null, alive, resolve, label, est: 0, starved: 0 });
     if (!running) kick();
   });
 }
 
-// Each chore's next step is started only if steps like its last few fit in
-// what's left of the frame; one that has waited eight frames runs regardless.
-// A step may hand back a promise (work done in a worker): its chore waits
-// for it, holding the queue, without spending the frames' time.
+// Chores run in the order they came, a step at a time. A step is started
+// only if steps like its chore's last few fit before `until`; one held back
+// for a few frames (one, in a hurry) runs regardless. A step may hand back a
+// promise (work done in a worker): its chore waits for it, and the others
+// carry on meanwhile. A chore no longer wanted is dropped, waiting or not.
 function work(until) {
   let ran = false;
-  while (chores.length) {
-    const c = chores[0], now = performance.now();
-    if (c.waiting) break;
-    if (now + (c.est || 0) > until && !(c.starved > 8 && !ran)) {
-      c.starved = (c.starved || 0) + 1;
-      break;
-    }
-    let done = !c.it;
-    if (c.alive()) {
-      try {
-        if (!done) {
-          const step = c.it.next();
-          done = step.done;
-          if (!done && isPromise(step.value)) {
-            c.waiting = true;
-            step.value.then(null, () => {}).then(() => {
-              c.waiting = false;
-              if (!running) kick();
-            });
-          }
-        }
-        const took = performance.now() - now;
-        c.est = Math.max(took, (c.est || 0) * 0.8);
-        c.starved = 0;
-        ran = true;
-        if (frameLog && took > 4) (window.__slowSteps ||= []).push([+took.toFixed(1), c.label]);
-      } catch (err) {
-        console.error(err);
-        chores.shift();
-        c.resolve(false);
-        continue;
-      }
-    } else {
-      chores.shift();
+  for (let i = 0; i < chores.length; ) {
+    const c = chores[i];
+    if (!c.alive()) {
+      chores.splice(i, 1);
       c.resolve(false);
       continue;
     }
+    if (c.waiting) {
+      i++;
+      continue;
+    }
+    const now = performance.now();
+    if (now + c.est > until) {
+      if (ran) break;
+      if (++c.starved <= (hurry ? 1 : 8)) {
+        c.est *= 0.8; // one slow step (a cache filled, say) shouldn't hold back all the rest for long
+        break;
+      }
+    }
+    let done = !c.it, waitOn = null;
+    try {
+      if (!done) {
+        const step = c.it.next();
+        done = step.done;
+        if (!done && isPromise(step.value)) waitOn = step.value;
+      }
+    } catch (err) {
+      console.error(err);
+      chores.splice(i, 1);
+      c.resolve(false);
+      continue;
+    }
+    const took = performance.now() - now;
+    c.est = Math.max(took, c.est * 0.8);
+    c.starved = 0;
+    ran = true;
+    // (with ?profile: what that step was, by its chore's label)
+    const label = choreLog && (typeof c.label === 'function' ? c.label() : c.label);
+    if (choreLog) {
+      choreLog[label] = (choreLog[label] || 0) + took;
+      if (took > 4) (window.__slowSteps ||= []).push([+took.toFixed(1), label]);
+    }
+    if (waitOn) {
+      c.waiting = true;
+      waitOn.then(null, () => {}).then(() => {
+        c.waiting = false;
+        if (choreLog) choreLog[`${label} (waiting)`] = (choreLog[`${label} (waiting)`] || 0) + performance.now() - now;
+        if (!running) kick();
+      });
+    }
     if (done) {
-      chores.shift();
+      chores.splice(i, 1);
       c.resolve(true);
     }
   }
 }
 
+// after each frame (a task posted from it runs once the browser has taken
+// the frame): background work until shortly before the next frame is due
+const afterFrame = new MessageChannel();
+afterFrame.port1.onmessage = () => {
+  if (!running || !chores.length) return;
+  const t = performance.now();
+  work(Math.max(due - MARGIN, t + (hurry ? Math.min(HURRY, Math.max(SLICE, drawMs)) : SLICE)));
+  if (frameLog?.length) frameLog[frameLog.length - 1][2] += performance.now() - t;
+};
+
 function kick() {
-  if (choreTimer || !chores.length || chores[0].waiting) return;
+  if (choreTimer || chores.every((c) => c.waiting)) return;
   choreTimer = setTimeout(() => {
     choreTimer = 0;
     if (running) return; // the frames take over
     work(performance.now() + 8);
     kick();
   }, 0);
+}
+
+// The time between frames, as the display (or the browser, saving power)
+// paces them: the shortest of the last 32.
+const gapsSeen = new Float32Array(32).fill(1000 / 60);
+let gapN = 0, interval = 1000 / 60;
+function paced(gap) {
+  gapsSeen[gapN++ % gapsSeen.length] = gap;
+  let m = Infinity;
+  for (const g of gapsSeen) if (g < m) m = g;
+  interval = Math.min(50, Math.max(1000 / 144, m));
 }
 
 // ---------- the repaint's masks and maps ----------
@@ -345,7 +392,7 @@ function workerMap(opts) {
 
 // ---------- getting a painting ready ----------
 // Before a switch, the next painting is made ready off screen, with nothing
-// on screen changing: built in the frames' spare time, its clock run up to
+// on screen changing: built between frames, its clock run up to
 // the current one's over its last few seconds (so its smoke, drifting
 // strokes and sails are already in motion), drawn once to fill its caches,
 // and its repaint map painted. From then it keeps running in step with the
@@ -354,8 +401,13 @@ function workerMap(opts) {
 const pending = new Map(); // id -> { stage, warm, ready: promise of true when it's ready }
 const nextSeed = () => (reveal && reveal.seed === SEEDS[0] ? SEEDS[1] : SEEDS[0]);
 
-function prepare(id) {
+// picked: the visitor has chosen it and is waiting (not just looking at its
+// card), so it's got ready in a hurry, and nothing merely looked at since
+// takes its place
+function prepare(id, picked = false) {
   if (!loader.has(id) || !ready) return Promise.resolve(false);
+  if (picked) hurry = id;
+  else if (hurry && hurry !== id) return Promise.resolve(false);
   const seed = nextSeed();
   if (stack.some((s) => s.def.id === id)) {
     // on screen already: only its map is needed (to brush it back in)
@@ -364,20 +416,37 @@ function prepare(id) {
   const have = pending.get(id);
   if (have) return have.ready;
   dropPending();
+  if (picked) hurry = id; // (dropping the last one let go of it)
   const entry = { stage: null, warm: false, ready: null };
   const bid = buildId, alive = () => pending.get(id) === entry && bid === buildId;
   pending.set(id, entry);
+  const t0 = performance.now(), log = prepLog ? (prepLog[id] = {}) : null;
+  const mark = (what) => log && (log[what] = Math.round(performance.now() - t0));
   entry.ready = (async () => {
     const def = await loader.module(id);
     if (!alive()) return false;
+    mark('module');
     const stage = (entry.stage = newStage(def));
     stage.fit();
-    const map = view.motion ? mapFor(id, seed).catch(() => null) : null;
-    if (!(await stage.build(alive, background)) || !alive()) return false;
-    if (view.motion && !(await background(stage.warmUp(() => simTime), alive, 'warm-up'))) return false;
-    if (!(await background(stage.prime(), alive, 'prime'))) return false;
+    const map = view.motion ? mapFor(id, seed).then(() => mark('map'), () => null) : null;
+    // built, run up to the current clock and drawn once, as one run of steps
+    // (so no frame goes by idle between them)
+    let part = 'build';
+    const steps = (function* () {
+      yield* stage.buildSteps();
+      mark('build');
+      part = 'warm-up';
+      if (view.motion) yield* stage.warmUp(() => simTime);
+      mark('warm-up');
+      part = 'prime';
+      yield* stage.prime();
+      mark('prime');
+    })();
+    const label = () => (part === 'warm-up' ? part : `${stage.compositor.working || ''}${part === 'prime' ? ' (prime)' : ''}`);
+    if (!(await background(steps, alive, label))) return false;
     await map;
     if (!alive()) return false;
+    mark('ready');
     entry.warm = true;
     return true;
   })().catch((err) => {
@@ -387,7 +456,11 @@ function prepare(id) {
   return entry.ready;
 }
 
+// it's being shown: nothing waits on getting it ready any more
+const unhurry = (id) => hurry === id && (hurry = null);
+
 function dropPending() {
+  hurry = null;
   for (const [id, entry] of pending) {
     pending.delete(id);
     if (entry.stage) retire(entry.stage);
@@ -407,7 +480,7 @@ function dropPending() {
 // Picking another painting part-way: each mask so far is kept as it is, and
 // the next repaint carries on from what's on screen, so nothing jumps.
 //
-// The page calls prepare(id), then retarget(id) (from here on the page's
+// The page calls prepare(id, true), then retarget(id) (from here on the page's
 // questions are answered for the new scene), then reveal(id), which settles
 // once it's painted (true) or overtaken (false).
 
@@ -432,15 +505,19 @@ let revealSeq = 0;
 async function revealTo(id) {
   if (!loader.has(id)) return false;
   const mine = ++revealSeq;
-  if (reveal && reveal.target.def.id === id) return reveal.promise;
+  if (reveal && reveal.target.def.id === id) {
+    unhurry(id);
+    return reveal.promise;
+  }
   if (!reveal && stack.length === 1 && stack[0].def.id === id) {
+    unhurry(id);
     target = null;
     return true;
   }
   // nothing on screen to repaint over (still loading, scrolled away, or in a
   // hidden tab): it's just shown
   if (!ready || !governor.canRun()) return showNow(id, mine);
-  const ok = await prepare(id);
+  const ok = await prepare(id, true);
   if (mine !== revealSeq) return false;
   const stage = stageOf(id);
   if (!ok || !ready || !stage || !governor.canRun()) return showNow(id, mine);
@@ -460,6 +537,9 @@ async function revealTo(id) {
 
 function begin(stage, src, seed) {
   const prev = reveal, m = maskRenderer();
+  hurry = null;
+  // the frames given up to getting it ready aren't the repaint's to answer for
+  governor.begin(performance.now());
   if (view.motion) sizeMasks();
   const mw = Math.round(view.W * REVEAL.scale), mh = Math.round(view.CH * REVEAL.scale);
   // what's on screen stays as it is: each painting's mask so far is kept
@@ -589,6 +669,7 @@ function dropReveal() {
 
 // Shows a scene without a repaint: at once if it's ready, or else built from scratch.
 async function showNow(id, mine) {
+  unhurry(id);
   const entry = pending.get(id);
   const stage = stack.find((s) => s.def.id === id) || (entry?.warm ? entry.stage : null);
   if (stage && ready) {
@@ -677,6 +758,7 @@ function start() {
   running = true;
   loops++;
   last = performance.now();
+  lastFrame = 0; // (the first frame's gap is no measure of the pace)
   governor.begin(last);
   rafId = requestAnimationFrame(frame);
 }
@@ -739,12 +821,19 @@ function frame(now) {
     if (reveal) advanceReveal(now, dt);
     draw();
   }
+  const repainting = !!reveal;
   if (reveal && reveal.s >= reveal.dur) handoff();
   const t2 = performance.now();
-  governor.trackFrame(t2 - t0, t2 - t1, now);
-  work(t0 + FRAME_BUDGET);
-  if (frameLog) frameLog.push([now, t2 - t0, performance.now() - t2, reveal ? 1 : 0]);
-  if (running) rafId = requestAnimationFrame(frame); // unless something stopped the loop during this frame
+  governor.trackFrame(t2 - t0, t2 - t1, now, !repainting);
+  if (lastFrame) paced(now - lastFrame);
+  lastFrame = now;
+  due = now + interval;
+  drawMs = t2 - t0;
+  if (frameLog) frameLog.push([now, t2 - t0, 0, repainting ? 1 : 0]);
+  if (running) {
+    rafId = requestAnimationFrame(frame); // unless something stopped the loop during this frame
+    if (chores.length) afterFrame.port2.postMessage(0);
+  }
 }
 
 function step() {
@@ -812,11 +901,14 @@ window.paintedScene = {
 
   // Switching, a step at a time (site.js runs the steps): get a scene ready
   // off screen (resolves true once it is; the gallery also does this as it
-  // opens), let go of one got ready and not used, make the page's questions
+  // opens and as a card is pointed at; `prepare(id, true)` once it's been
+  // picked), let go of one got ready and not used, make the page's questions
   // below answer for it, and brush it in (resolves true once it's painted,
   // false if another switch overtook it).
   prepare,
   release: () => !reveal && dropPending(),
+  // fetch every painting's module (as the gallery opens), so none is waited for when picked
+  preload: () => SCENES.forEach(({ id }) => loader.module(id).catch(() => {})),
   async retarget(id) {
     const def = await loader.module(id);
     target = def === stack[0]?.def && !reveal ? null : def;
@@ -869,6 +961,8 @@ window.paintedScene = {
       renderer: masks?.kind || null, chores: chores.length,
       ...governor.stats(), ...(adopted?.inst.stats?.() || {}),
       ...(shared.profile && adopted ? { layers: adopted.compositor.timings() } : {}),
+      // with ?profile: ms into getting each painting ready that each part was done, and ms of background work by kind
+      ...(prepLog ? { prepare: prepLog, background: Object.fromEntries(Object.entries(choreLog).map(([k, v]) => [k || 'other', Math.round(v)])) } : {}),
     };
   },
   // where each moving thing is in every painting that runs (on screen, or
